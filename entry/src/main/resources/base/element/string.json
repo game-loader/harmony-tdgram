@@ -1,0 +1,6 @@
+{
+  "string": [
+    { "name": "module_desc", "value": "Telegram client" },
+    { "name": "app_name", "value": "TdGram" }
+  ]
+}

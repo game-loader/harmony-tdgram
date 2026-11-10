@@ -1,0 +1,10 @@
+node_modules/
+.hvigor/
+build/
+.cxx/
+local.properties
+oh-package-lock.json5
+*.hap
+# Credentials and the prebuilt TDLib binary never go into the repository.
+entry/src/main/ets/common/Config.ets
+entry/libs/
