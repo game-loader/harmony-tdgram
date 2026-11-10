@@ -1,1 +1,4 @@
-{ "src": ["pages/Login", "pages/ChatList", "pages/Chat"] }
+{
+  "src": ["pages/Login", "pages/Main", "pages/Chat", "pages/MediaViewer", "pages/Forward", "pages/Profile",
+    "pages/Settings", "pages/Contacts", "pages/CreatePoll", "pages/SecretKey"]
+}

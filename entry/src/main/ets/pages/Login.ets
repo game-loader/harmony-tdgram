@@ -1,6 +1,8 @@
 import { router } from '@kit.ArkUI';
 import { QrView } from '../components/QrView';
-import { Store, StoreEvent } from '../td/Store';
+import { Account } from '../td/Account';
+import { Accounts } from '../td/Accounts';
+import { AccountEvent } from '../td/Core';
 import { TdError } from '../td/TdClient';
 
 @Entry
@@ -12,11 +14,13 @@ struct Login {
   @State error: string = '';
   @State busy: boolean = false;
   @State qrLink: string = '';
-  private store: Store = Store.get();
-  private listener = (e: StoreEvent): void => this.onStore(e);
+  @State canCancel: boolean = false;
+  private store: Account = Accounts.get().active();
+  private listener = (e: AccountEvent): void => this.onStore(e);
 
   aboutToAppear(): void {
     this.store.on(this.listener);
+    this.canCancel = Accounts.get().all().some((a: Account) => a.authStep === 'ready');
     this.sync();
   }
 
@@ -24,7 +28,7 @@ struct Login {
     this.store.off(this.listener);
   }
 
-  onStore(e: StoreEvent): void {
+  onStore(e: AccountEvent): void {
     if (e === 'auth') {
       this.sync();
     }
@@ -38,7 +42,7 @@ struct Login {
     this.step = this.store.authStep;
     this.hint = this.store.authHint;
     if (this.step === 'ready') {
-      router.replaceUrl({ url: 'pages/ChatList' });
+      router.replaceUrl({ url: 'pages/Main' });
     } else if (this.step === 'qr') {
       this.qrLink = this.store.qrLink;
     }
@@ -112,6 +116,15 @@ struct Login {
         Text(this.hint || '会话已关闭，请重启应用').fontSize(14).textAlign(TextAlign.Center)
       } else {
         LoadingProgress().width(48).height(48)
+      }
+      if (this.canCancel && this.step !== 'ready') {
+        Button('返回已登录的账号', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => {
+          const ready = Accounts.get().all().find((a: Account) => a.authStep === 'ready');
+          if (ready) {
+            Accounts.get().switchTo(ready.slot);
+            router.replaceUrl({ url: 'pages/Main' });
+          }
+        })
       }
       if (this.error) {
         Text(this.error).fontSize(14).fontColor(Color.Red)

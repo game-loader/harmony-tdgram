@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 .hvigor/
 build/
 .cxx/
@@ -8,3 +8,7 @@ oh-package-lock.json5
 # Credentials and the prebuilt TDLib binary never go into the repository.
 entry/src/main/ets/common/Config.ets
 entry/libs/
+entry/oh_modules/
+oh_modules/
+# Static Ogg/Opus libraries built by scripts/build-audio-ohos.sh.
+entry/src/main/cpp/prebuilt/

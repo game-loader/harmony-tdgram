@@ -1,6 +1,8 @@
 {
   "string": [
     { "name": "module_desc", "value": "Telegram client" },
-    { "name": "app_name", "value": "TdGram" }
+    { "name": "app_name", "value": "TdGram" },
+    { "name": "perm_mic", "value": "用于录制语音消息" },
+    { "name": "perm_location", "value": "用于发送你的位置" }
   ]
 }

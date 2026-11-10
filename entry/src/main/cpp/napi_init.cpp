@@ -13,6 +13,7 @@
 #include <napi/native_api.h>
 #include <td/telegram/td_json_client.h>
 
+#include "media.h"
 #include "third_party/qrcodegen/qrcodegen.hpp"
 
 #undef LOG_TAG
@@ -158,6 +159,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"startReceive", nullptr, StartReceive, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
+    RegisterMedia(env, exports);
     return exports;
 }
 EXTERN_C_END

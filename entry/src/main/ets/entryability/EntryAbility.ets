@@ -1,14 +1,25 @@
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
-import { Store } from '../td/Store';
+import { notificationManager } from '@kit.NotificationKit';
+import { Accounts } from '../td/Accounts';
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
-    // Start TDLib early so the stored session is restored while the UI loads.
-    Store.get().init(this.context);
+    // Start TDLib early so stored sessions are restored while the UI loads.
+    Accounts.get().init(this.context);
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
-    windowStage.loadContent('pages/Login');
+    const ready = Accounts.get().active().authStep === 'ready';
+    windowStage.loadContent(ready ? 'pages/Main' : 'pages/Login');
+    notificationManager.requestEnableNotification(this.context).catch(() => {});
+  }
+
+  onForeground(): void {
+    Accounts.get().setForeground(true);
+  }
+
+  onBackground(): void {
+    Accounts.get().setForeground(false);
   }
 }

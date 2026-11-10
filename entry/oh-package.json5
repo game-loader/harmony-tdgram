@@ -5,6 +5,7 @@
   "main": "",
   "license": "Apache-2.0",
   "dependencies": {
-    "libtdbridge.so": "file:./src/main/cpp/types/libtdbridge"
+    "libtdbridge.so": "file:./src/main/cpp/types/libtdbridge",
+    "@ohos/lottie": "file:../third_party/lottie-2.0.38.har"
   }
 }
