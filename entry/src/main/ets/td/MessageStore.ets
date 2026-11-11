@@ -5,13 +5,35 @@ import { fillContent, fillInteraction, fillMessage, NameOf } from './Parse';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const PAGE = 40;
+// TDLib often answers the first request with only the messages it has in
+// memory (sometimes a single one); keep asking until a screen can be filled.
+const MIN_FILL = 20;
 
 export interface SendOptions {
   replyTo: number;
   silent: boolean;
 }
 
-// Messages of the open chat, plus every message-level action.
+export type StoreEvent = 'messages' | 'pinned';
+
+// How a chat view wants its history positioned when it opens.
+export class OpenOptions {
+  messageId: number = 0;  // open around this message
+  lastReadId: number = 0; // last incoming message already read
+  unread: number = 0;     // unread count; with lastReadId, opens at the first unread message
+  secret: boolean = false;
+}
+
+export class SearchPage {
+  items: MsgItem[] = [];
+  next: string = ''; // cursor of the following page, '' at the end
+  total: number = 0;
+}
+
+// Messages of one opened chat (or forum topic) plus every message-level
+// action. Each chat view owns its own store, so several chats can be open at
+// once (split view, a chat opened from another chat's profile). A store that
+// was only bind()-ed serves sends and searches without loading history.
 export class MessageStore {
   private core: AccountCore;
   private nameOf: NameOf;
@@ -22,12 +44,36 @@ export class MessageStore {
   // False after jumping to an old message: newer pages must be loaded.
   atLatest: boolean = true;
   pinned: MsgItem | null = null;
-  readReceipts: boolean = true;
+  // First message after the read position when the chat was opened; the
+  // view draws the "unread messages" divider above it. 0 when none.
+  firstUnreadId: number = 0;
+  onChange: (e: StoreEvent) => void = (): void => {};
   private loading: boolean = false;
+  private opened: boolean = false;
+  private gen: number = 0; // bumped whenever the window is replaced
+  private secret: boolean = false;
+  private pendingEvents: Set<StoreEvent> = new Set();
+  private timer: number = -1;
 
   constructor(core: AccountCore, nameOf: NameOf) {
     this.core = core;
     this.nameOf = nameOf;
+  }
+
+  // Updates arrive in bursts; the view hears about each kind once per frame.
+  private notify(e: StoreEvent): void {
+    this.pendingEvents.add(e);
+    if (this.timer >= 0) {
+      return;
+    }
+    this.timer = setTimeout(() => {
+      this.timer = -1;
+      const events = Array.from(this.pendingEvents);
+      this.pendingEvents.clear();
+      for (const ev of events) {
+        this.onChange(ev);
+      }
+    }, 16);
   }
 
   // One malformed message must not blank the whole page, so parse errors
@@ -65,37 +111,40 @@ export class MessageStore {
     return this.parse(raw);
   }
 
-  private session: number = 0;
-
-  // Returns a session token for close(). In split view the next chat can
-  // open before the previous view is torn down; a stale close is ignored.
-  open(chatId: number, topicId: number = 0): number {
-    this.closeChat();
-    this.session++;
+  // Targets a chat for sends and searches without opening it.
+  bind(chatId: number, topicId: number = 0, secret: boolean = false): MessageStore {
     this.chatId = chatId;
     this.topicId = topicId;
-    this.messages = [];
-    this.olderDone = false;
-    this.atLatest = true;
-    this.pinned = null;
-    this.core.td.send(o({ '@type': 'openChat', 'chat_id': chatId })).catch(() => {});
-    this.loadOlder();
-    this.refreshPinned();
-    return this.session;
+    this.secret = secret;
+    return this;
   }
 
-  close(session: number): void {
-    if (session === this.session) {
-      this.closeChat();
+  // Called by Account.openSession. TDLib counts openChat/closeChat per chat,
+  // so two views of the same chat are fine.
+  start(opt: OpenOptions): void {
+    this.opened = true;
+    this.secret = opt.secret;
+    this.core.td.send(o({ '@type': 'openChat', 'chat_id': this.chatId })).catch(() => {});
+    this.refreshPinned();
+    if (opt.messageId) {
+      this.loadAround(opt.messageId, 0);
+    } else if (opt.unread > 0 && opt.lastReadId > 0) {
+      this.loadAround(opt.lastReadId, opt.lastReadId);
+    } else {
+      this.loadOlder();
     }
   }
 
-  private closeChat(): void {
-    if (this.chatId) {
+  stop(): void {
+    if (this.opened) {
+      this.opened = false;
       this.core.td.send(o({ '@type': 'closeChat', 'chat_id': this.chatId })).catch(() => {});
     }
-    this.chatId = 0;
-    this.topicId = 0;
+    if (this.timer >= 0) {
+      clearTimeout(this.timer);
+      this.timer = -1;
+    }
+    this.onChange = (): void => {};
     this.messages = [];
   }
 
@@ -117,108 +166,162 @@ export class MessageStore {
   }
 
   private history(from: number, offset: number, limit: number): Promise<TdObject[]> {
-    const chatId = this.chatId;
-    const topicId = this.topicId;
-    const req = topicId ?
-      o({ '@type': 'getForumTopicHistory', 'chat_id': chatId, 'forum_topic_id': topicId, 'from_message_id': from,
-        'offset': offset, 'limit': limit }) :
-      o({ '@type': 'getChatHistory', 'chat_id': chatId, 'from_message_id': from,
+    const req = this.topicId ?
+      o({ '@type': 'getForumTopicHistory', 'chat_id': this.chatId, 'forum_topic_id': this.topicId,
+        'from_message_id': from, 'offset': offset, 'limit': limit }) :
+      o({ '@type': 'getChatHistory', 'chat_id': this.chatId, 'from_message_id': from,
         'offset': offset, 'limit': limit, 'only_local': false });
     return this.core.td.send(req).then((res: TdObject) =>
-      chatId === this.chatId && topicId === this.topicId ? ((res['messages'] as TdObject[]) ?? []) : []);
+      this.opened ? ((res['messages'] as TdObject[]) ?? []).filter((m: TdObject) => m !== null) : []);
   }
 
   // TDLib may return short pages while it fetches from the server, so only an
   // empty page ends the history.
   loadOlder(): void {
-    if (this.loading || this.olderDone || !this.chatId) {
+    if (this.loading || this.olderDone || !this.opened) {
       return;
     }
     this.loading = true;
+    let more = false;
+    const gen = this.gen;
     const from = this.messages.length > 0 ? this.messages[0].id : 0;
     this.history(from, 0, PAGE).then((list: TdObject[]) => {
+      if (gen !== this.gen) {
+        return;
+      }
       if (list.length === 0 || (list.length === 1 && (list[0]['id'] as number) === from)) {
         this.olderDone = true;
       }
       this.merge(list);
-      this.markRead();
-      this.core.emit('messages');
-    }).catch(() => {}).finally(() => {
-      this.loading = false;
+      this.notify('messages');
+      more = true;
+    }).catch(() => {
+      // Still announce, so the view can leave its loading state.
+      this.notify('messages');
+    }).finally(() => {
+      if (gen === this.gen) {
+        this.loading = false;
+        if (more) {
+          this.fill();
+        }
+      }
     });
   }
 
   loadNewer(): void {
-    if (this.loading || this.atLatest || this.messages.length === 0) {
+    if (this.loading || this.atLatest || this.messages.length === 0 || !this.opened) {
       return;
     }
     this.loading = true;
+    const gen = this.gen;
     const last = this.messages[this.messages.length - 1].id;
     this.history(last, -PAGE + 1, PAGE).then((list: TdObject[]) => {
+      if (gen !== this.gen) {
+        return;
+      }
       const before = this.messages.length;
       this.merge(list);
       if (this.messages.length === before) {
         this.atLatest = true;
       }
-      this.markRead();
-      this.core.emit('messages');
+      this.notify('messages');
     }).catch(() => {}).finally(() => {
-      this.loading = false;
+      if (gen === this.gen) {
+        this.loading = false;
+        this.fill();
+      }
     });
   }
 
-  // Replaces the window with messages around `id`. Resolves when loaded.
-  jumpTo(id: number): Promise<boolean> {
-    if (this.find(id)) {
-      return Promise.resolve(true);
+  private fill(): void {
+    if (this.messages.length < MIN_FILL && !this.olderDone) {
+      this.loadOlder();
     }
+  }
+
+  // Replaces the window with the messages around `id`. `readUpTo` > 0 marks
+  // the read position: the first later incoming message becomes firstUnreadId.
+  private loadAround(id: number, readUpTo: number): Promise<boolean> {
+    const gen = ++this.gen;
+    this.loading = true;
     return this.history(id, -PAGE / 2, PAGE).then((list: TdObject[]) => {
+      if (gen !== this.gen) {
+        return false;
+      }
+      this.loading = false;
       if (list.length === 0) {
+        if (readUpTo) {
+          this.loadOlder();
+        }
         return false;
       }
       this.messages = [];
       this.merge(list);
-      this.atLatest = false;
       this.olderDone = false;
-      this.core.emit('messages');
+      // Whether this window reaches the newest message is settled by the
+      // loadNewer() below: it finds nothing newer when it does.
+      this.atLatest = false;
+      if (readUpTo) {
+        const first = this.messages.find((m: MsgItem) => m.id > readUpTo && !m.outgoing);
+        this.firstUnreadId = first ? first.id : 0;
+      }
+      this.notify('messages');
+      // A short window may not fill the screen, so no scroll would ask for
+      // the next page; fetch it once now. It also settles atLatest.
+      this.loadNewer();
       return this.find(id) !== undefined;
+    }).catch(() => {
+      if (gen === this.gen) {
+        this.loading = false;
+      }
+      return false;
     });
+  }
+
+  // Re-announces the list, e.g. after the chat's read position moved.
+  touch(): void {
+    this.notify('messages');
+  }
+
+  jumpTo(id: number): Promise<boolean> {
+    if (this.find(id)) {
+      return Promise.resolve(true);
+    }
+    return this.loadAround(id, 0);
   }
 
   jumpToLatest(): void {
     if (this.atLatest) {
       return;
     }
+    this.gen++;
     this.messages = [];
     this.atLatest = true;
     this.olderDone = false;
+    this.loading = false;
     this.loadOlder();
   }
 
-  markRead(): void {
-    if (!this.readReceipts || !this.chatId || this.messages.length === 0 || !this.atLatest) {
+  // Tells TDLib which messages are on screen; it advances the read position
+  // to the newest of them and counts channel views.
+  view(ids: number[]): void {
+    if (!this.core.readReceipts || !this.opened || ids.length === 0) {
       return;
     }
     this.core.td.send(o({
-      '@type': 'viewMessages', 'chat_id': this.chatId,
-      'message_ids': [this.messages[this.messages.length - 1].id],
+      '@type': 'viewMessages', 'chat_id': this.chatId, 'message_ids': ids,
       'source': o({ '@type': this.topicId ? 'messageSourceForumTopicHistory' : 'messageSourceChatHistory' }),
-      'force_read': true
+      'force_read': false
     })).catch(() => {});
   }
 
   refreshPinned(): void {
-    const chatId = this.chatId;
-    this.core.td.send(o({ '@type': 'getChatPinnedMessage', 'chat_id': chatId })).then((raw: TdObject) => {
-      if (chatId === this.chatId) {
-        this.pinned = this.parse(raw);
-        this.core.emit('pinned');
-      }
+    this.core.td.send(o({ '@type': 'getChatPinnedMessage', 'chat_id': this.chatId })).then((raw: TdObject) => {
+      this.pinned = this.parse(raw);
+      this.notify('pinned');
     }).catch(() => {
-      if (chatId === this.chatId) {
-        this.pinned = null;
-        this.core.emit('pinned');
-      }
+      this.pinned = null;
+      this.notify('pinned');
     });
   }
 
@@ -226,11 +329,12 @@ export class MessageStore {
     return this.core.td.send(o({ '@type': 'getMessage', 'chat_id': chatId, 'message_id': id }))
       .then((raw: TdObject) => this.parse(raw));
   }
+
   // ---- Sending ----
 
-  private send(content: TdObject, opts: SendOptions): Promise<TdObject> {
+  private request(type: string, opts: SendOptions): TdObject {
     const req: TdObject = {
-      '@type': 'sendMessage', 'chat_id': this.chatId, 'input_message_content': content,
+      '@type': type, 'chat_id': this.chatId,
       'options': o({ '@type': 'messageSendOptions', 'disable_notification': opts.silent })
     };
     const topic = this.topic();
@@ -243,6 +347,22 @@ export class MessageStore {
     if (!this.atLatest) {
       this.jumpToLatest();
     }
+    return req;
+  }
+
+  private send(content: TdObject, opts: SendOptions): Promise<TdObject> {
+    const req = this.request('sendMessage', opts);
+    req['input_message_content'] = content;
+    return this.core.td.send(req);
+  }
+
+  // Photos and videos sent together arrive as one album (2 to 10 items).
+  sendAlbum(contents: TdObject[], opts: SendOptions): Promise<TdObject> {
+    if (contents.length === 1) {
+      return this.send(contents[0], opts);
+    }
+    const req = this.request('sendMessageAlbum', opts);
+    req['input_message_contents'] = contents;
     return this.core.td.send(req);
   }
 
@@ -266,7 +386,7 @@ export class MessageStore {
     return o({ '@type': 'inputFileLocal', 'path': path });
   }
 
-  sendPhoto(path: string, caption: string, opts: SendOptions, spoiler: boolean, selfDestruct: number): Promise<TdObject> {
+  photoContent(path: string, caption: string, spoiler: boolean, selfDestruct: number): TdObject {
     const content: TdObject = {
       '@type': 'inputMessagePhoto',
       'photo': o({ '@type': 'inputPhoto', 'photo': this.local(path), 'added_sticker_file_ids': [], 'width': 0, 'height': 0 }),
@@ -275,17 +395,20 @@ export class MessageStore {
     if (selfDestruct) {
       content['self_destruct_type'] = o({ '@type': 'messageSelfDestructTypeTimer', 'self_destruct_time': selfDestruct });
     }
-    return this.send(content, opts);
+    return content;
   }
 
-  sendVideo(path: string, caption: string, opts: SendOptions, w: number, h: number, duration: number,
-    spoiler: boolean): Promise<TdObject> {
-    return this.send(o({
+  videoContent(path: string, caption: string, w: number, h: number, duration: number): TdObject {
+    return o({
       '@type': 'inputMessageVideo',
       'video': o({ '@type': 'inputVideo', 'video': this.local(path), 'added_sticker_file_ids': [],
         'duration': Math.round(duration), 'width': w, 'height': h, 'supports_streaming': true }),
-      'caption': this.plain(caption), 'has_spoiler': spoiler
-    }), opts);
+      'caption': this.plain(caption), 'has_spoiler': false
+    });
+  }
+
+  sendPhoto(path: string, caption: string, opts: SendOptions, spoiler: boolean, selfDestruct: number): Promise<TdObject> {
+    return this.send(this.photoContent(path, caption, spoiler, selfDestruct), opts);
   }
 
   sendDocument(path: string, caption: string, opts: SendOptions): Promise<TdObject> {
@@ -325,8 +448,7 @@ export class MessageStore {
   sendLocation(lat: number, lon: number, opts: SendOptions): Promise<TdObject> {
     return this.send(o({
       '@type': 'inputMessageLocation',
-      'location': o({ '@type': 'location', 'latitude': lat, 'longitude': lon, 'horizontal_accuracy': 0 }),
-      'live_period': 0, 'heading': 0, 'proximity_alert_radius': 0
+      'location': o({ '@type': 'location', 'latitude': lat, 'longitude': lon, 'horizontal_accuracy': 0 })
     }), opts);
   }
 
@@ -336,7 +458,8 @@ export class MessageStore {
       'question': this.plain(question),
       'options': options.map((t: string) => o({ '@type': 'inputPollOption', 'text': this.plain(t) })),
       'is_anonymous': anonymous, 'allows_multiple_answers': multiple,
-      'type': o({ '@type': 'pollTypeRegular' }), 'open_period': 0, 'close_date': 0, 'is_closed': false
+      'type': o({ '@type': 'inputPollTypeRegular', 'allow_adding_options': false }),
+      'open_period': 0, 'close_date': 0, 'is_closed': false
     }), opts);
   }
 
@@ -344,8 +467,12 @@ export class MessageStore {
     return this.send(o({ '@type': 'inputMessageDice', 'emoji': emoji, 'clear_draft': false }), opts);
   }
 
-  setDraft(chatId: number, text: string, replyTo: number): void {
-    const req: TdObject = { '@type': 'setChatDraftMessage', 'chat_id': chatId };
+  setDraft(text: string, replyTo: number): void {
+    const req: TdObject = { '@type': 'setChatDraftMessage', 'chat_id': this.chatId };
+    const topic = this.topic();
+    if (topic) {
+      req['topic_id'] = topic;
+    }
     if (text) {
       const draft: TdObject = {
         '@type': 'draftMessage', 'date': 0,
@@ -369,6 +496,7 @@ export class MessageStore {
       this.core.td.send(req).catch(() => {});
     }
   }
+
   // ---- Message actions ----
 
   editText(m: MsgItem, text: string, markdown: boolean): Promise<TdObject> {
@@ -460,7 +588,7 @@ export class MessageStore {
   }
 
   // Marks self-destructing or listened-to content as opened (starts timers).
-  opened(m: MsgItem): void {
+  markOpened(m: MsgItem): void {
     this.core.td.send(o({ '@type': 'openMessageContent', 'chat_id': m.chatId, 'message_id': m.id })).catch(() => {});
   }
 
@@ -471,16 +599,37 @@ export class MessageStore {
     }));
   }
 
-  search(query: string, filter: string, from: number): Promise<MsgItem[]> {
+  // Newest first. `filter` is a searchMessagesFilter* type name; `cursor` is
+  // '' for the first page, then the previous page's `next`.
+  search(query: string, filter: string, cursor: string): Promise<SearchPage> {
+    // Secret chats are searched on the device by a separate request.
+    if (this.secret && query) {
+      return this.core.td.send(o({
+        '@type': 'searchSecretMessages', 'chat_id': this.chatId, 'query': query, 'offset': cursor, 'limit': 50,
+        'filter': o({ '@type': filter })
+      })).then((r: TdObject) => this.page(r, (r['next_offset'] as string) ?? ''));
+    }
     const req: TdObject = {
       '@type': 'searchChatMessages', 'chat_id': this.chatId, 'query': query,
-      'from_message_id': from, 'offset': 0, 'limit': 50, 'filter': o({ '@type': filter })
+      'from_message_id': cursor ? Number(cursor) : 0, 'offset': 0, 'limit': 50, 'filter': o({ '@type': filter })
     };
     const topic = this.topic();
     if (topic) {
       req['topic_id'] = topic;
     }
-    return this.core.td.send(req).then((r: TdObject) => ((r['messages'] as TdObject[]) ?? []).map((raw: TdObject) => this.parse(raw)));
+    return this.core.td.send(req).then((r: TdObject) => {
+      const next = (r['next_from_message_id'] as number) ?? 0;
+      return this.page(r, next ? String(next) : '');
+    });
+  }
+
+  private page(r: TdObject, next: string): SearchPage {
+    const p = new SearchPage();
+    p.items = ((r['messages'] as TdObject[]) ?? []).filter((raw: TdObject) => raw !== null)
+      .map((raw: TdObject) => this.parse(raw));
+    p.total = (r['total_count'] as number) ?? p.items.length;
+    p.next = p.items.length > 0 ? next : '';
+    return p;
   }
 
   // ---- Updates for the open chat ----
@@ -501,12 +650,11 @@ export class MessageStore {
       this.refill(existing, raw);
     } else if (this.atLatest) {
       this.messages.push(this.parse(raw));
-      this.markRead();
     } else {
       return; // a newer page will include it
     }
     this.messages = this.messages.slice().sort((a: MsgItem, b: MsgItem) => a.id - b.id);
-    this.core.emit('messages');
+    this.notify('messages');
   }
 
   private patch(u: TdObject, fn: (m: MsgItem) => void): void {
@@ -518,7 +666,7 @@ export class MessageStore {
       fn(m);
       m.version++;
       this.messages = this.messages.slice();
-      this.core.emit('messages');
+      this.notify('messages');
     }
   }
 
@@ -563,7 +711,7 @@ export class MessageStore {
         if (this.pinned && ids.has(this.pinned.id)) {
           this.refreshPinned();
         }
-        this.core.emit('messages');
+        this.notify('messages');
         break;
       }
       default:

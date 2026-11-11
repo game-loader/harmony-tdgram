@@ -1,17 +1,21 @@
-import { router, promptAction } from '@kit.ArkUI';
+import { promptAction } from '@kit.ArkUI';
 import { ChatRow, ChatRowData } from '../components/ChatRow';
+import { PaneHeader } from '../components/PaneHeader';
 import { AppState } from '../common/AppState';
+import { Nav } from '../common/Nav';
 import { Accounts } from '../td/Accounts';
 import { ChatItem } from '../td/Models';
 import { TdError } from '../td/TdClient';
 
-// Picks the destination chat for AppState.forward.
-@Entry
+// Picks the destination chat for AppState.forward, then opens that chat.
 @Component
-struct Forward {
+export struct ForwardPane {
+  nav: Nav = new Nav();
+  @Prop showBack: boolean = true;
   @State rows: ChatRowData[] = [];
   @State query: string = '';
   private acc = Accounts.get().active();
+  private busy: boolean = false;
 
   aboutToAppear(): void {
     this.refresh();
@@ -22,35 +26,34 @@ struct Forward {
     this.rows = this.acc.chats.sorted(0)
       .filter((c: ChatItem) => c.canSend && (!q || c.title.toLowerCase().includes(q)))
       .map((c: ChatItem) => new ChatRowData(c, c.photoPath || this.acc.files.known(c.photoFileId), false,
-        this.acc.chats.isMuted(c), '', true, false));
+        this.acc.chats.isMuted(c), '', true, false, this.acc.chats.isForum(c)));
   }
 
   send(chatId: number): void {
     const req = AppState.forward;
     if (!req) {
-      router.back();
+      this.nav.pop();
       return;
     }
-    AppState.forward = null;
-    this.acc.messages.forward(chatId, req.fromChatId, req.ids, req.asCopy).then(() => {
+    if (this.busy) {
+      return;
+    }
+    this.busy = true;
+    this.acc.actions.forward(chatId, req.fromChatId, req.ids, req.asCopy).then(() => {
+      AppState.forward = null;
       promptAction.showToast({ message: '已转发' });
-      router.back();
+      this.nav.replaceWithChat(chatId);
     }).catch((e: TdError) => {
+      this.busy = false;
       promptAction.showToast({ message: `转发失败：${e.message}` });
-      router.back();
     });
   }
 
   build() {
     Column() {
-      Row({ space: 8 }) {
-        Button('‹', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(28).onClick(() => router.back())
-        Text('转发到…').fontSize(18).fontWeight(FontWeight.Medium)
-      }
-      .width('100%')
-      .padding({ top: 4, bottom: 4 })
+      PaneHeader({ title: '转发到…', showBack: this.showBack, onBack: (): void => { this.nav.pop(); } })
       Search({ value: this.query, placeholder: '搜索' })
-        .margin({ left: 12, right: 12 })
+        .margin({ left: 12, right: 12, bottom: 4 })
         .onChange((v: string) => {
           this.query = v;
           this.refresh();
@@ -63,9 +66,10 @@ struct Forward {
         }, (r: ChatRowData) => r.key)
       }
       .layoutWeight(1)
+      .divider({ strokeWidth: 0.5, color: $r('app.color.separator'), startMargin: 80 })
     }
     .width('100%')
     .height('100%')
-    .backgroundColor($r('sys.color.ohos_id_color_background'))
+    .backgroundColor($r('app.color.page_bg'))
   }
 }

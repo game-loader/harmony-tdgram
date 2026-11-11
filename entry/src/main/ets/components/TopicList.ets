@@ -16,9 +16,10 @@ function hexColor(c: number): string {
 @Component
 export struct TopicList {
   chatId: number = 0;
-  showBack: boolean = true;
+  @Prop showBack: boolean = true;
   onBack: () => void = (): void => {};
-  onOpenTopic: (topicId: number, name: string) => void = (): void => {};
+  onOpenTopic: (topic: TopicItem) => void = (): void => {};
+  onOpenProfile: () => void = (): void => {};
   @State topics: TopicItem[] = [];
   @State title: string = '';
   @State photo: string = '';
@@ -76,17 +77,19 @@ export struct TopicList {
         Avatar({ title: this.title, seed: this.chatId, path: this.photo, side: 38 })
         Column() {
           Text(this.title).fontSize(17).fontWeight(FontWeight.Medium).maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-          Text(`${this.topics.length} 个话题`).fontSize(12).fontColor('#888888')
+            .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.text_primary'))
+          Text(`${this.topics.length} 个话题`).fontSize(12).fontColor($r('app.color.text_secondary'))
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
+        .onClick(() => this.onOpenProfile())
       }
-      .padding({ left: this.showBack ? 0 : 12, right: 8, top: 2, bottom: 2 })
+      .padding({ left: this.showBack ? 0 : 12, right: 8 })
+      .height(52)
       .width('100%')
 
       if (this.loading) {
-        LoadingProgress().width(40).height(40).margin({ top: 40 })
+        LoadingProgress().width(36).height(36).margin({ top: 40 }).color($r('app.color.accent'))
       }
       List() {
         ForEach(this.topics, (t: TopicItem) => {
@@ -103,20 +106,21 @@ export struct TopicList {
                   }
                   Text(t.name).fontSize(16).fontWeight(FontWeight.Medium).maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+                    .fontColor($r('app.color.text_primary'))
                   if (t.lastDate) {
-                    Text(formatTime(t.lastDate)).fontSize(12).fontColor('#888888')
+                    Text(formatTime(t.lastDate)).fontSize(12).fontColor($r('app.color.text_secondary'))
                   }
                 }
                 Row({ space: 4 }) {
-                  Text(t.lastText).fontSize(14).fontColor('#777777').maxLines(1)
+                  Text(t.lastText).fontSize(14).fontColor($r('app.color.text_secondary')).maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
                   if (t.unreadMentions > 0) {
                     Text('@').fontSize(12).fontColor(Color.White).width(22).height(22).borderRadius(11)
-                      .textAlign(TextAlign.Center).backgroundColor('#3A8DDE')
+                      .textAlign(TextAlign.Center).backgroundColor($r('app.color.accent'))
                   }
                   if (t.unread > 0) {
                     Text(t.unread > 999 ? '999+' : String(t.unread)).fontSize(12).fontColor(Color.White)
-                      .padding({ left: 7, right: 7 }).height(22).borderRadius(11).backgroundColor('#3A8DDE')
+                      .padding({ left: 7, right: 7 }).height(22).borderRadius(11).backgroundColor($r('app.color.accent'))
                   } else if (t.isPinned) {
                     Text('📌').fontSize(12)
                   }
@@ -127,15 +131,15 @@ export struct TopicList {
             }
             .padding({ left: 14, right: 14, top: 9, bottom: 9 })
             .width('100%')
-            .onClick(() => this.onOpenTopic(t.id, t.name))
+            .onClick(() => this.onOpenTopic(t))
           }
         }, (t: TopicItem) => `${t.id}|${t.name}|${t.unread}|${t.unreadMentions}|${t.lastDate}|${t.lastText}|${t.isPinned}`)
       }
       .layoutWeight(1)
-      .divider({ strokeWidth: 0.5, color: $r('sys.color.ohos_id_color_list_separator'), startMargin: 70 })
+      .divider({ strokeWidth: 0.5, color: $r('app.color.separator'), startMargin: 70 })
     }
     .width('100%')
     .height('100%')
-    .backgroundColor($r('sys.color.ohos_id_color_background'))
+    .backgroundColor($r('app.color.page_bg'))
   }
 }

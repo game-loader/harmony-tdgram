@@ -57,13 +57,16 @@ export function fillContent(item: MsgItem, content: TdObject, nameOf: NameOf): v
   item.entities = [];
   item.fileId = 0;
   item.thumbFileId = 0;
+  item.thumbPath = '';
   item.minithumb = '';
+  item.linkUrl = '';
   const type = content['@type'] as string;
   switch (type) {
     case 'messageText':
       item.kind = 'text';
       item.text = ft(content['text']);
       item.entities = ftEntities(content['text']);
+      fillLinkPreview(item, content['link_preview'] as TdObject | undefined);
       break;
     case 'messagePhoto': {
       item.kind = 'photo';
@@ -84,6 +87,14 @@ export function fillContent(item: MsgItem, content: TdObject, nameOf: NameOf): v
         item.height = best['height'] as number;
       }
       setThumb(item, undefined, photo['minithumbnail'] as TdObject | undefined);
+      // A small rendition is shown first, and in media grids.
+      const small = sizes.find((s: TdObject) => (s['width'] as number) >= 200);
+      if (small && small !== best) {
+        const f = small['photo'] as TdObject;
+        item.thumbFileId = f['id'] as number;
+        item.thumbPath = localPath(f);
+        item.thumbIsVideo = false;
+      }
       break;
     }
     case 'messageVideo': {
@@ -227,6 +238,36 @@ export function fillContent(item: MsgItem, content: TdObject, nameOf: NameOf): v
     }
   }
 }
+// Site name, title, description and (when there is one) the photo of a link preview.
+function fillLinkPreview(item: MsgItem, p: TdObject | undefined): void {
+  if (!p) {
+    return;
+  }
+  item.linkUrl = (p['url'] as string) ?? '';
+  item.linkSite = (p['site_name'] as string) ?? '';
+  item.linkTitle = (p['title'] as string) ?? '';
+  item.linkText = ft(p['description']);
+  const t = p['type'] as TdObject | undefined;
+  const photo = t ? t['photo'] as TdObject | undefined : undefined;
+  const sizes = photo ? ((photo['sizes'] as TdObject[]) ?? []) : [];
+  if (photo && sizes.length > 0) {
+    // A mid-size rendition is enough for the preview card.
+    let best = sizes[0];
+    for (const s of sizes) {
+      if ((s['width'] as number) <= 800) {
+        best = s;
+      }
+    }
+    const f = best['photo'] as TdObject;
+    item.thumbFileId = f['id'] as number;
+    item.thumbPath = localPath(f);
+    item.thumbIsVideo = false;
+    item.width = best['width'] as number;
+    item.height = best['height'] as number;
+    setThumb(item, undefined, photo['minithumbnail'] as TdObject | undefined);
+  }
+}
+
 export function fillSticker(item: MsgItem, s: TdObject): void {
   setFile(item, s['sticker'] as TdObject);
   item.width = s['width'] as number;

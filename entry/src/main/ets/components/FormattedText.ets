@@ -65,14 +65,12 @@ export function splitRuns(text: string, entities: TdObject[]): TextRun[] {
   return runs;
 }
 
-const LINK = '#2A7FD4';
-
 @Component
 export struct FormattedText {
   @Prop text: string = '';
   @Prop entities: TdObject[] = [];
   @Prop fontSize: number = 16;
-  @Prop color: ResourceColor = '#000000';
+  @Prop color: ResourceColor = $r('app.color.text_primary');
   @State revealed: boolean = false;
   onLink: (url: string) => void = () => {};
   onMention: (name: string, userId: number) => void = () => {};
@@ -86,14 +84,14 @@ export struct FormattedText {
           .fontStyle(r.italic ? FontStyle.Italic : FontStyle.Normal)
           .fontFamily(r.code ? 'monospace' : 'HarmonyOS Sans')
           .fontColor(r.spoiler && !this.revealed ? '#00000000' :
-            (r.link || r.mention || r.mentionUser ? LINK : (r.quote ? '#3A6E9E' : this.color)))
+            (r.link || r.mention || r.mentionUser || r.quote ? $r('app.color.link') : this.color))
           .decoration({
             type: r.underline || r.link ? TextDecorationType.Underline :
               (r.strike ? TextDecorationType.LineThrough : TextDecorationType.None),
-            color: r.link ? LINK : this.color
+            color: r.link ? $r('app.color.link') : this.color
           })
           .textBackgroundStyle({
-            color: r.spoiler && !this.revealed ? '#99888888' : (r.code ? '#1A000000' : Color.Transparent),
+            color: r.spoiler && !this.revealed ? '#99888888' : (r.code ? $r('app.color.inset') : Color.Transparent),
             radius: 3
           })
           .onClick(() => {

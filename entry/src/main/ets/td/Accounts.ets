@@ -1,10 +1,15 @@
-import { common } from '@kit.AbilityKit';
+import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { notificationManager } from '@kit.NotificationKit';
+import { wantAgent, WantAgent } from '@kit.AbilityKit';
 import { Account } from './Account';
 import { ChatItem, MsgItem } from './Models';
 import { summary } from './Parse';
-import { o } from './TdClient';
+import { ProxyConfig } from './Proxy';
+import { o, TdObject } from './TdClient';
+
+export type ThemeMode = 'auto' | 'light' | 'dark';
+export type SplitMode = 'auto' | 'on' | 'off';
 
 // App-wide settings, several of them Nicegram-style privacy options.
 export class Settings {
@@ -16,6 +21,33 @@ export class Settings {
   translateTo: string = 'zh';
   autoplayGifs: boolean = true;
   autoDownloadMedia: boolean = true;
+  theme: ThemeMode = 'auto';
+  splitMode: SplitMode = 'auto'; // chat list beside the open chat
+  listWidth: number = 0;         // vp, width of the list in split view; 0 = default
+  proxies: ProxyConfig[] = [];
+  proxyIndex: number = -1;       // enabled proxy, -1 = direct connection
+
+  // A copy with the saved values of `s` where present.
+  static from(s: Settings): Settings {
+    const d = new Settings();
+    d.ghostMode = s.ghostMode ?? d.ghostMode;
+    d.hidePhone = s.hidePhone ?? d.hidePhone;
+    d.markdown = s.markdown ?? d.markdown;
+    d.notifications = s.notifications ?? d.notifications;
+    d.notifyPreview = s.notifyPreview ?? d.notifyPreview;
+    d.translateTo = s.translateTo ?? d.translateTo;
+    d.autoplayGifs = s.autoplayGifs ?? d.autoplayGifs;
+    d.autoDownloadMedia = s.autoDownloadMedia ?? d.autoDownloadMedia;
+    d.theme = s.theme ?? d.theme;
+    d.splitMode = s.splitMode ?? d.splitMode;
+    d.listWidth = s.listWidth ?? d.listWidth;
+    d.proxies = (s.proxies ?? []).map((p: ProxyConfig) => ProxyConfig.from(p));
+    d.proxyIndex = s.proxyIndex ?? d.proxyIndex;
+    if (d.proxyIndex >= d.proxies.length) {
+      d.proxyIndex = -1;
+    }
+    return d;
+  }
 }
 
 type ManagerListener = () => void;
@@ -30,6 +62,9 @@ export class Accounts {
   activeSlot: number = 0;
   settings: Settings = new Settings();
   appInForeground: boolean = true;
+  // Chat a tapped notification asks for; the main page opens and clears it.
+  pendingChat: number = 0;
+  onThemeChanged: () => void = (): void => {};
 
   static get(): Accounts {
     if (!Accounts.instance) {
@@ -48,17 +83,13 @@ export class Accounts {
     this.activeSlot = this.store.getSync('active', slots[0]) as number;
     const saved = this.store.getSync('settings', '') as string;
     if (saved) {
-      const s = JSON.parse(saved) as Settings;
-      const d = new Settings();
-      this.settings.ghostMode = s.ghostMode ?? d.ghostMode;
-      this.settings.hidePhone = s.hidePhone ?? d.hidePhone;
-      this.settings.markdown = s.markdown ?? d.markdown;
-      this.settings.notifications = s.notifications ?? d.notifications;
-      this.settings.notifyPreview = s.notifyPreview ?? d.notifyPreview;
-      this.settings.translateTo = s.translateTo ?? d.translateTo;
-      this.settings.autoplayGifs = s.autoplayGifs ?? d.autoplayGifs;
-      this.settings.autoDownloadMedia = s.autoDownloadMedia ?? d.autoDownloadMedia;
+      try {
+        this.settings = Settings.from(JSON.parse(saved) as Settings);
+      } catch (e) {
+        this.settings = new Settings();
+      }
     }
+    this.applyTheme();
     for (const slot of slots) {
       this.create(slot);
     }
@@ -74,14 +105,24 @@ export class Accounts {
       if (acc.authStep === 'ready') {
         this.applyGhost(acc);
       }
-      // A logged-out secondary account is removed entirely.
-      if (acc.authStep === 'closed' && this.accounts.size > 1 && acc.myUserId) {
-        this.remove(acc.slot);
+      if (acc.authStep === 'closed' && acc.myUserId) {
+        if (this.accounts.size > 1) {
+          // A logged-out secondary account is removed entirely.
+          this.remove(acc.slot);
+        } else {
+          // The only account: a closed TDLib client cannot be reused, so a
+          // fresh one takes its slot and the login screen works right away.
+          acc.td.dispose();
+          this.create(acc.slot);
+        }
       }
       this.changed();
     };
-    a.messages.readReceipts = !this.settings.ghostMode;
+    a.readReceipts = !this.settings.ghostMode;
     this.accounts.set(slot, a);
+    // TDLib queues these until its parameters are set, so the proxy is in
+    // place before the first connection of a fresh login.
+    this.applyProxy(a);
     return a;
   }
 
@@ -151,11 +192,74 @@ export class Accounts {
     this.store?.putSync('settings', JSON.stringify(this.settings));
     this.store?.flush();
     for (const a of this.all()) {
-      a.messages.readReceipts = !this.settings.ghostMode;
+      a.readReceipts = !this.settings.ghostMode;
       if (a.authStep === 'ready') {
         this.applyGhost(a);
       }
     }
+    this.changed();
+  }
+
+  // Light, dark, or whatever the system uses. System colors and the app's
+  // own color resources both follow this.
+  applyTheme(): void {
+    const mode = this.settings.theme === 'dark' ? ConfigurationConstant.ColorMode.COLOR_MODE_DARK :
+      (this.settings.theme === 'light' ? ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT :
+        ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
+    try {
+      this.context?.getApplicationContext().setColorMode(mode);
+    } catch (e) {
+      // Keep the system's mode.
+    }
+    this.onThemeChanged();
+  }
+
+  // A notification was tapped: switch to its account and open the chat.
+  openFromNotification(slot: number, chatId: number): void {
+    if (!this.accounts.has(slot) || !chatId) {
+      return;
+    }
+    this.pendingChat = chatId;
+    if (slot !== this.activeSlot) {
+      this.activeSlot = slot;
+      this.persist();
+    }
+    this.changed();
+  }
+
+  clearNotifications(a: Account, chatId: number): void {
+    notificationManager.cancelGroup(`chat_${a.slot}_${chatId}`).catch(() => {});
+  }
+
+  // Makes every account use the enabled proxy, or a direct connection.
+  applyProxies(): void {
+    for (const a of this.all()) {
+      this.applyProxy(a);
+    }
+  }
+
+  // Changes run one after another per account, so the last one applied wins.
+  private proxyJobs: Map<number, Promise<void>> = new Map();
+
+  private applyProxy(a: Account): void {
+    const prev = this.proxyJobs.get(a.slot) ?? Promise.resolve();
+    this.proxyJobs.set(a.slot, prev.then(() => this.setProxy(a)));
+  }
+
+  private setProxy(a: Account): Promise<void> {
+    const s = this.settings;
+    const wanted = s.proxyIndex >= 0 && s.proxyIndex < s.proxies.length ? s.proxies[s.proxyIndex] : null;
+    // TDLib persists its own list; clear it so only the wanted proxy remains.
+    return a.send(o({ '@type': 'getProxies' })).then((r: TdObject) => {
+      const old = ((r['proxies'] as TdObject[]) ?? []).map((p: TdObject) => p['id'] as number);
+      const removals = old.map((id: number) => a.send(o({ '@type': 'removeProxy', 'proxy_id': id })).catch(() => o({})));
+      return Promise.all(removals);
+    }).then(() => {
+      if (wanted) {
+        return a.send(o({ '@type': 'addProxy', 'proxy': wanted.toTd(), 'enable': true, 'comment': '' }));
+      }
+      return a.send(o({ '@type': 'disableProxy' }));
+    }).then(() => {}).catch(() => {});
   }
 
   private applyGhost(a: Account): void {
@@ -180,7 +284,7 @@ export class Accounts {
       return;
     }
     // Skip the chat the user is looking at.
-    if (this.appInForeground && a.slot === this.activeSlot && a.messages.chatId === chat.id) {
+    if (this.appInForeground && a.slot === this.activeSlot && a.isViewing(chat.id)) {
       return;
     }
     let text = this.settings.notifyPreview ? summary(msg) : '新消息';
@@ -197,6 +301,22 @@ export class Accounts {
         normal: { title: chat.title, text: text }
       }
     };
-    notificationManager.publish(request).catch(() => {});
+    // Tapping the notification opens that chat.
+    const ctx = this.context!;
+    const info: wantAgent.WantAgentInfo = {
+      wants: [{
+        bundleName: ctx.abilityInfo.bundleName, abilityName: ctx.abilityInfo.name,
+        parameters: { 'tdgramSlot': String(a.slot), 'tdgramChat': String(chat.id) }
+      }],
+      actionType: wantAgent.OperationType.START_ABILITY,
+      requestCode: 0,
+      actionFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG]
+    };
+    wantAgent.getWantAgent(info).then((agent: WantAgent) => {
+      request.wantAgent = agent;
+      return notificationManager.publish(request);
+    }).catch(() => {
+      notificationManager.publish(request).catch(() => {});
+    });
   }
 }

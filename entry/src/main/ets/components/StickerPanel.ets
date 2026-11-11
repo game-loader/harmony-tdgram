@@ -3,6 +3,7 @@ import { MsgItem } from '../td/Models';
 import { fillSticker } from '../td/Parse';
 import { o, TdObject } from '../td/TdClient';
 import { StickerView } from './StickerView';
+import { columnsFor } from '../common/Layout';
 
 const EMOJI: string[] = ('😀 😃 😄 😁 😆 😅 😂 🤣 😊 😇 🙂 🙃 😉 😌 😍 🥰 😘 😗 😙 😚 😋 😛 😝 😜 🤪 🤨 🧐 🤓 😎 🤩 🥳 ' +
   '😏 😒 😞 😔 😟 😕 🙁 😣 😖 😫 😩 🥺 😢 😭 😤 😠 😡 🤬 🤯 😳 🥵 🥶 😱 😨 😰 😥 😓 🤗 🤔 🤭 🤫 🤥 😶 😐 ' +
@@ -29,6 +30,8 @@ export struct StickerPanel {
   onEmoji: (e: string) => void = () => {};
   onSticker: (fileId: number) => void = () => {};
   onGif: (fileId: number) => void = () => {};
+  @Prop paneW: number = 360;
+  @Prop panelH: number = 260;
   @State tab: number = 0; // 0 emoji, 1 stickers, 2 gifs
   @State sets: StickerSetTab[] = [];
   @State setIndex: number = 0;
@@ -130,13 +133,17 @@ export struct StickerPanel {
     }).catch(() => {});
   }
 
+  private cols(cell: number, min: number, max: number): string {
+    return new Array<string>(columnsFor(this.paneW, cell, min, max)).fill('1fr').join(' ');
+  }
+
   @Builder
   TabBar() {
     Row() {
       ForEach(['😀 表情', '🧩 贴纸', 'GIF'], (t: string, i: number) => {
         Text(t).fontSize(14).layoutWeight(1).textAlign(TextAlign.Center).padding(8)
-          .fontColor(this.tab === i ? '#3A8DDE' : '#666666')
-          .border({ width: { bottom: this.tab === i ? 2 : 0 }, color: { bottom: '#3A8DDE' } })
+          .fontColor(this.tab === i ? $r('app.color.accent') : $r('app.color.text_secondary'))
+          .border({ width: { bottom: this.tab === i ? 2 : 0 }, color: { bottom: $r('app.color.accent') } })
           .onClick(() => {
             this.tab = i;
             if (i === 2 && this.gifs.length === 0) {
@@ -159,15 +166,15 @@ export struct StickerPanel {
             }
           }, (e: string) => e)
         }
-        .columnsTemplate('1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr')
+        .columnsTemplate(this.cols(44, 6, 16))
         .rowsGap(6)
-        .height(260)
+        .height(this.panelH)
       } else if (this.tab === 1) {
         Scroll() {
           Row({ space: 4 }) {
             ForEach(this.sets, (s: StickerSetTab, i: number) => {
               Text(s.title).fontSize(13).maxLines(1).padding({ left: 10, right: 10, top: 4, bottom: 4 })
-                .borderRadius(12).backgroundColor(this.setIndex === i ? '#223A8DDE' : Color.Transparent)
+                .borderRadius(12).backgroundColor(this.setIndex === i ? $r('app.color.accent_soft') : Color.Transparent)
                 .onClick(() => this.selectSet(i))
             }, (s: StickerSetTab) => s.id)
           }
@@ -183,9 +190,9 @@ export struct StickerPanel {
             }
           }, (c: StickerCell) => `${c.fileId}|${c.path}|${c.thumb}`)
         }
-        .columnsTemplate('1fr 1fr 1fr 1fr')
+        .columnsTemplate(this.cols(88, 4, 9))
         .rowsGap(6)
-        .height(224)
+        .height(Math.max(100, this.panelH - 36))
       } else {
         Grid() {
           ForEach(this.gifs, (c: StickerCell) => {
@@ -205,14 +212,14 @@ export struct StickerPanel {
             }
           }, (c: StickerCell) => `${c.fileId}|${c.path}|${c.thumb}`)
         }
-        .columnsTemplate('1fr 1fr 1fr')
+        .columnsTemplate(this.cols(124, 3, 7))
         .rowsGap(4)
         .columnsGap(4)
-        .height(260)
+        .height(this.panelH)
         .padding(4)
       }
     }
     .width('100%')
-    .backgroundColor($r('sys.color.ohos_id_color_sub_background'))
+    .backgroundColor($r('app.color.page_alt'))
   }
 }

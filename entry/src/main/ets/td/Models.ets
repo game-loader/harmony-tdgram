@@ -23,6 +23,7 @@ export class ChatItem {
   lastMsgId: number = 0;
   lastOutgoing: boolean = false;
   lastReadOutboxId: number = 0;
+  lastReadInboxId: number = 0;
   unread: number = 0;
   unreadMentions: number = 0;
   markedUnread: boolean = false;
@@ -45,6 +46,8 @@ export class TopicItem {
   isPinned: boolean = false;
   unread: number = 0;
   unreadMentions: number = 0;
+  lastReadInboxId: number = 0;
+  lastMsgId: number = 0;
   lastText: string = '';
   lastDate: number = 0;
   order: string = '0';
@@ -129,6 +132,11 @@ export class MsgItem {
   width: number = 0;
   height: number = 0;
   duration: number = 0;
+  // Link preview of a text message
+  linkUrl: string = '';
+  linkSite: string = '';
+  linkTitle: string = '';
+  linkText: string = '';
   // Sticker
   stickerFormat: string = ''; // webp | tgs | webm
   emoji: string = '';

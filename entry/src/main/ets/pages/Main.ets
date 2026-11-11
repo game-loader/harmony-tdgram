@@ -1,31 +1,27 @@
-import { router, promptAction } from '@kit.ArkUI';
+import { display, promptAction, router } from '@kit.ArkUI';
 import { ChatRow, ChatRowData } from '../components/ChatRow';
-import { ChatController } from '../components/ChatView';
 import { ChatPane } from '../components/ChatPane';
 import { Avatar } from '../components/Avatar';
+import { ContactsPane } from '../panes/ContactsPane';
+import { ForwardPane } from '../panes/ForwardPane';
+import { PollPane } from '../panes/PollPane';
+import { ProfilePane } from '../panes/ProfilePane';
+import { ProxyPane } from '../panes/ProxyPane';
+import { SecretKeyPane } from '../panes/SecretKeyPane';
+import { SettingsPane } from '../panes/SettingsPane';
 import { Account } from '../td/Account';
 import { Accounts } from '../td/Accounts';
 import { FolderItem } from '../td/ChatStore';
 import { AccountEvent } from '../td/Core';
 import { ChatItem, MsgItem } from '../td/Models';
 import { summary } from '../td/Parse';
+import { isSplit, listWidth, snapListWidth } from '../common/Layout';
+import { Nav, Route } from '../common/Nav';
 import { formatTime } from '../common/Util';
 import { pickAction } from '../common/Menu';
 
 const MUTE_FOREVER = 0x7FFFFFFF;
-// Split view (chat list | open chat) is tuned for Huawei Pura X Max:
-// the unfolded 2584x1828 inner screen is landscape, ~800-860vp wide, and
-// splits; held upright it is only ~560-610vp wide and the cover screen
-// (1848x1264, ~390vp) is narrower still, so both show one pane at a time.
-// Upright windows split only when really wide (large tablets).
-const SPLIT_MIN_LANDSCAPE = 600;
-const SPLIT_MIN_PORTRAIT = 840;
-
-class OpenChat {
-  chatId: number = 0;
-  messageId: number = 0;
-  seq: number = 0; // recreates the chat view when the same chat is reopened at a message
-}
+const DIVIDER_W = 12; // touch width of the divider between the panes
 
 class SearchHit {
   chatId: number = 0;
@@ -35,6 +31,11 @@ class SearchHit {
   date: number = 0;
 }
 
+// The whole signed-in UI: the chat list plus a stack of detail routes
+// (chats, profiles, settings...). Wide windows (an unfolded foldable, a
+// tablet) show both side by side; narrow ones show the list or the top
+// route. Both parts stay alive across folding, so scroll positions, drafts
+// and opened pages survive it.
 @Entry
 @Component
 struct Main {
@@ -42,22 +43,30 @@ struct Main {
   @State folders: FolderItem[] = [];
   @State folderId: number = 0; // 0 all, -1 archive, else folder id
   @State query: string = '';
-  @State searching: boolean = false;
   @State hits: SearchHit[] = [];
   @State myName: string = '';
   @State myPhoto: string = '';
   @State archiveCount: number = 0;
   @State winWidth: number = 0;
   @State winHeight: number = 0;
-  @State open: OpenChat = new OpenChat();
-  private chatController: ChatController = new ChatController();
-  private openSeq: number = 0;
+  @State stack: Route[] = [];
+  @State splitMode: string = 'auto';
+  @State savedListW: number = 0;
+  @State dragW: number = 0; // list width while the divider is dragged, 0 otherwise
+  @State connection: string = '';
+  private nav: Nav = new Nav();
   private acc: Account = Accounts.get().active();
   private listener = (e: AccountEvent): void => this.onEvent(e);
   private managerListener = (): void => this.onAccountsChanged();
   private searchTimer: number = -1;
+  private dragFrom: number = 0;
+  private leaving: boolean = false;
 
   aboutToAppear(): void {
+    this.nav.onChange = (): void => {
+      this.stack = this.nav.stack;
+    };
+    this.readSettings();
     this.attach();
     Accounts.get().on(this.managerListener);
   }
@@ -65,43 +74,85 @@ struct Main {
   aboutToDisappear(): void {
     this.acc.off(this.listener);
     Accounts.get().off(this.managerListener);
+    clearTimeout(this.searchTimer);
   }
 
   onPageShow(): void {
     this.refresh();
   }
 
+  private readSettings(): void {
+    const s = Accounts.get().settings;
+    this.splitMode = s.splitMode;
+    this.savedListW = s.listWidth;
+  }
+
   private attach(): void {
     this.acc.on(this.listener);
     this.folders = this.acc.chats.folders.slice();
     this.refreshMe();
+    this.refreshConnection();
     this.refresh();
+    this.openPending();
+  }
+
+  private toLogin(): void {
+    if (!this.leaving) {
+      this.leaving = true;
+      router.replaceUrl({ url: 'pages/Login' });
+    }
   }
 
   private onAccountsChanged(): void {
+    this.readSettings();
     const active = Accounts.get().active();
     if (active !== this.acc) {
       this.acc.off(this.listener);
       this.acc = active;
       this.folderId = 0;
-      this.open = new OpenChat();
+      this.query = '';
+      this.hits = [];
+      // Routes belong to the previous account.
+      this.nav.clear();
       this.attach();
     }
     if (this.acc.authStep !== 'ready' && this.acc.authStep !== 'loading') {
-      router.replaceUrl({ url: 'pages/Login' });
+      this.toLogin();
+    }
+    this.openPending();
+  }
+
+  // Opens the chat of a tapped notification once its account is active.
+  private openPending(): void {
+    const mgr = Accounts.get();
+    if (mgr.pendingChat && this.acc.authStep === 'ready' && this.acc.chat(mgr.pendingChat)) {
+      const chatId = mgr.pendingChat;
+      mgr.pendingChat = 0;
+      this.nav.openRootChat(chatId);
     }
   }
 
   onEvent(e: AccountEvent): void {
     if (e === 'auth' && this.acc.authStep !== 'ready') {
-      router.replaceUrl({ url: 'pages/Login' });
+      this.toLogin();
     } else if (e === 'folders') {
       this.folders = this.acc.chats.folders.slice();
     } else if (e === 'me') {
       this.refreshMe();
+    } else if (e === 'connection') {
+      this.refreshConnection();
     } else if (e === 'chats' || e === 'files' || e === 'typing') {
       this.refresh();
+      if (e === 'chats' && Accounts.get().pendingChat) {
+        this.openPending();
+      }
     }
+  }
+
+  private refreshConnection(): void {
+    const c = this.acc.connection;
+    this.connection = c === 'ready' ? '' : (c === 'waiting' ? '等待网络…' : (c === 'proxy' ? '正在连接代理…' :
+      (c === 'updating' ? '正在更新…' : '正在连接…')));
   }
 
   private refreshMe(): void {
@@ -117,7 +168,7 @@ struct Main {
       const online = user !== undefined && user.status !== null && user.status['@type'] === 'userStatusOnline' &&
         !user.isBot && c.userId !== this.acc.myUserId;
       return new ChatRowData(c, c.photoPath || this.acc.files.path(c.photoFileId), chats.isPinned(c, this.folderId),
-        chats.isMuted(c), chats.typingText(c.id), c.lastReadOutboxId >= c.lastMsgId, online);
+        chats.isMuted(c), chats.typingText(c.id), c.lastReadOutboxId >= c.lastMsgId, online, chats.isForum(c));
     });
     if (this.folderId === 0) {
       this.archiveCount = chats.sorted(-1).length;
@@ -132,9 +183,7 @@ struct Main {
 
   onQuery(q: string): void {
     this.query = q;
-    if (this.searchTimer >= 0) {
-      clearTimeout(this.searchTimer);
-    }
+    clearTimeout(this.searchTimer);
     if (!q.trim()) {
       this.hits = [];
       return;
@@ -171,41 +220,46 @@ struct Main {
     }).catch(() => {});
   }
 
-  private wide(): boolean {
-    const w = this.winWidth;
-    return w >= SPLIT_MIN_PORTRAIT || (w >= SPLIT_MIN_LANDSCAPE && w > this.winHeight);
+  // ---- Layout ----
+
+  private split(): boolean {
+    return isSplit(this.winWidth, this.winHeight, this.splitMode);
   }
 
-  openChat(chatId: number, msgId: number = 0): void {
-    if (chatId === this.open.chatId && !msgId) {
-      return;
+  private listW(): number {
+    return this.dragW > 0 ? this.dragW : listWidth(this.winWidth, this.savedListW);
+  }
+
+  // Horizontal position and width (vp) of a vertical fold crease inside the
+  // window; [0, 0] when there is none.
+  private crease(): number[] {
+    try {
+      if (!display.isFoldable()) {
+        return [0, 0];
+      }
+      for (const r of display.getCurrentFoldCreaseRegion().creaseRects) {
+        if (r.height > r.width) {
+          return [px2vp(r.left), px2vp(r.width)];
+        }
+      }
+    } catch (e) {
+      // No fold information on this device.
     }
-    const o = new OpenChat();
-    o.chatId = chatId;
-    o.messageId = msgId;
-    o.seq = ++this.openSeq;
-    this.open = o;
+    return [0, 0];
   }
 
-  closeChat(): void {
-    this.open = new OpenChat();
-    this.refresh();
+  private saveListWidth(w: number): void {
+    const mgr = Accounts.get();
+    mgr.settings.listWidth = w;
+    this.savedListW = w;
+    mgr.saveSettings();
   }
 
   onBackPress(): boolean {
-    if (!this.open.chatId) {
-      return false;
-    }
-    if (this.chatController.back()) {
-      return true;
-    }
-    // On a wide window the list stays visible, so back leaves the app as usual.
-    if (this.wide()) {
-      return false;
-    }
-    this.closeChat();
-    return true;
+    // Leaves the app only when no detail route is open.
+    return this.nav.back();
   }
+
   // Long-press menu of a chat row.
   chatMenu(row: ChatRowData): void {
     const c = row.chat;
@@ -238,6 +292,9 @@ struct Main {
     promptAction.showDialog({ title: `删除与“${c.title}”的聊天？`, buttons: buttons })
       .then((r: promptAction.ShowDialogSuccessResponse) => {
         if (r.index >= 1) {
+          if (this.nav.rootChatId() === c.id) {
+            this.nav.clear();
+          }
           this.acc.deleteChat(c, r.index === 2).catch((e: Error) => promptAction.showToast({ message: e.message }));
         }
       });
@@ -266,55 +323,121 @@ struct Main {
       .fontSize(14)
       .padding({ left: 14, right: 14, top: 6, bottom: 6 })
       .borderRadius(16)
-      .fontColor(this.folderId === id ? Color.White : $r('sys.color.ohos_id_color_text_primary'))
-      .backgroundColor(this.folderId === id ? '#3A8DDE' : '#14000000')
+      .fontColor(this.folderId === id ? Color.White : $r('app.color.text_primary'))
+      .backgroundColor(this.folderId === id ? $r('app.color.accent') : $r('app.color.chip'))
       .onClick(() => this.selectFolder(id))
+  }
+
+  // A route needs its back button unless it is the first one and the list
+  // is shown beside it. Read from state here (not passed in) so that folding
+  // and unfolding update panes that are already open.
+  private backFor(index: number): boolean {
+    return !this.split() || index > 0;
+  }
+
+  @Builder
+  RoutePane(r: Route, index: number) {
+    if (r.kind === 'chat') {
+      ChatPane({ nav: this.nav, route: r, showBack: this.backFor(index), active: index === this.stack.length - 1,
+        onBack: (): void => { this.nav.pop(); } })
+    } else if (r.kind === 'profile') {
+      ProfilePane({ nav: this.nav, route: r, showBack: this.backFor(index) })
+    } else if (r.kind === 'settings') {
+      SettingsPane({ nav: this.nav, showBack: this.backFor(index) })
+    } else if (r.kind === 'contacts') {
+      ContactsPane({ nav: this.nav, showBack: this.backFor(index) })
+    } else if (r.kind === 'forward') {
+      ForwardPane({ nav: this.nav, showBack: this.backFor(index) })
+    } else if (r.kind === 'poll') {
+      PollPane({ nav: this.nav, route: r, showBack: this.backFor(index) })
+    } else if (r.kind === 'secretKey') {
+      SecretKeyPane({ nav: this.nav, route: r, showBack: this.backFor(index) })
+    } else {
+      ProxyPane({ nav: this.nav, showBack: this.backFor(index) })
+    }
+  }
+
+  // Every route of the stack stays alive; only the top one is visible. The
+  // first route needs no back button while the list is shown beside it.
+  @Builder
+  Detail() {
+    Stack() {
+      if (this.stack.length === 0) {
+        Column() {
+          Text('选择一个聊天开始').fontSize(14).fontColor(Color.White)
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 }).borderRadius(14)
+            .backgroundColor($r('app.color.service_bg'))
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor($r('app.color.chat_bg'))
+      }
+      ForEach(this.stack, (r: Route, i: number) => {
+        Column() {
+          this.RoutePane(r, i)
+        }
+        .width('100%')
+        .height('100%')
+        .visibility(i === this.stack.length - 1 ? Visibility.Visible : Visibility.None)
+      }, (r: Route) => `${r.id}`)
+    }
+    .layoutWeight(1)
+    .height('100%')
+    .visibility(this.split() || this.stack.length > 0 ? Visibility.Visible : Visibility.None)
+  }
+
+  // Drag to resize the panes (snaps to the fold's crease); double-tap for
+  // the default width.
+  @Builder
+  Divider() {
+    Column() {
+      Column().width(this.dragW > 0 ? 3 : 0.5).height('100%')
+        .backgroundColor(this.dragW > 0 ? $r('app.color.accent') : $r('app.color.separator'))
+    }
+    .width(DIVIDER_W)
+    .height('100%')
+    .margin({ left: -DIVIDER_W / 2, right: -DIVIDER_W / 2 })
+    .zIndex(1)
+    .gesture(GestureGroup(GestureMode.Exclusive,
+      PanGesture({ direction: PanDirection.Horizontal, distance: 4 })
+        .onActionStart(() => {
+          this.dragFrom = this.listW();
+          this.dragW = this.dragFrom;
+        })
+        .onActionUpdate((e: GestureEvent) => {
+          const c = this.crease();
+          this.dragW = snapListWidth(this.winWidth, this.dragFrom + e.offsetX, c[0], c[1]);
+        })
+        .onActionEnd(() => {
+          const w = this.dragW;
+          this.dragW = 0;
+          if (w > 0) {
+            this.saveListWidth(w);
+          }
+        })
+        .onActionCancel(() => {
+          this.dragW = 0;
+        }),
+      TapGesture({ count: 2 }).onAction(() => this.saveListWidth(0))
+    ))
   }
 
   build() {
     Row() {
-      if (this.wide() || !this.open.chatId) {
-        this.ListPane()
+      this.ListPane()
+      if (this.split()) {
+        this.Divider()
       }
-      if (this.open.chatId) {
-        Column() {
-          ForEach([this.open], (oc: OpenChat) => {
-            ChatPane({
-              chatId: oc.chatId,
-              messageId: oc.messageId,
-              showBack: !this.wide(),
-              controller: this.chatController,
-              onBack: (): void => this.closeChat(),
-              onOpenChat: (id: number): void => this.openChat(id)
-            })
-          }, (oc: OpenChat) => `${oc.chatId}|${oc.seq}`)
-        }
-        .layoutWeight(1)
-        .height('100%')
-        .border({ width: { left: this.wide() ? 0.5 : 0 }, color: $r('sys.color.ohos_id_color_list_separator') })
-      } else if (this.wide()) {
-        Column() {
-          Text('选择一个聊天开始').fontSize(14).fontColor(Color.White)
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 }).borderRadius(14).backgroundColor('#66556677')
-        }
-        .layoutWeight(1)
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor($r('sys.color.ohos_id_color_sub_background'))
-      }
+      this.Detail()
     }
     .width('100%')
     .height('100%')
+    .backgroundColor($r('app.color.page_bg'))
     .onAreaChange((_: Area, area: Area) => {
       this.winWidth = Number(area.width);
       this.winHeight = Number(area.height);
     })
-  }
-
-  // Width of the list when shown next to a chat.
-  private listWidth(): Length {
-    // ~38% on the Pura X Max inner screen leaves the chat about 500vp.
-    return this.wide() ? Math.min(400, Math.max(300, this.winWidth * 0.38)) : '100%';
   }
 
   @Builder
@@ -323,22 +446,35 @@ struct Main {
       Row({ space: 10 }) {
         if (this.folderId === -1) {
           Button('‹', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(26).onClick(() => this.selectFolder(0))
-          Text('归档').fontSize(22).fontWeight(FontWeight.Bold).layoutWeight(1)
+          Text('归档').fontSize(22).fontWeight(FontWeight.Bold).layoutWeight(1).fontColor($r('app.color.text_primary'))
         } else {
           Avatar({ title: this.myName, seed: this.acc.myUserId, path: this.myPhoto, side: 36 })
-            .onClick(() => router.pushUrl({ url: 'pages/Settings' }))
-          Text('TdGram').fontSize(22).fontWeight(FontWeight.Bold).layoutWeight(1)
+            .onClick(() => {
+              this.nav.openRoot('settings');
+              this.nav.commit();
+            })
+          Column() {
+            Text('TdGram').fontSize(22).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+            if (this.connection) {
+              Text(this.connection).fontSize(12).fontColor($r('app.color.accent'))
+            }
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
           Button('✎', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(20)
-            .onClick(() => router.pushUrl({ url: 'pages/Contacts' }))
+            .onClick(() => {
+              this.nav.openRoot('contacts');
+              this.nav.commit();
+            })
         }
       }
-      .padding({ left: 14, right: 6, top: 10, bottom: 4 })
+      .padding({ left: 14, right: 6, top: 6, bottom: 4 })
+      .constraintSize({ minHeight: 52 })
       .width('100%')
 
       Search({ value: this.query, placeholder: '搜索聊天和消息' })
         .margin({ left: 12, right: 12, bottom: 4 })
         .onChange((v: string) => this.onQuery(v))
-        .onEditChange((editing: boolean) => { this.searching = editing || this.query.length > 0; })
 
       if (this.query.trim()) {
         List() {
@@ -350,18 +486,19 @@ struct Main {
                 Column({ space: 2 }) {
                   Row() {
                     Text(h.title).fontSize(15).fontWeight(FontWeight.Medium).maxLines(1).layoutWeight(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.text_primary'))
                     if (h.date) {
-                      Text(formatTime(h.date)).fontSize(12).fontColor('#888888')
+                      Text(formatTime(h.date)).fontSize(12).fontColor($r('app.color.text_secondary'))
                     }
                   }
-                  Text(h.text).fontSize(13).fontColor('#777777').maxLines(1)
+                  Text(h.text).fontSize(13).fontColor($r('app.color.text_secondary')).maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
                 }
                 .alignItems(HorizontalAlign.Start)
                 .layoutWeight(1)
               }
               .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-              .onClick(() => this.openChat(h.chatId, h.msgId))
+              .onClick(() => this.nav.openRootChat(h.chatId, h.msgId))
             }
           }, (h: SearchHit) => `${h.chatId}|${h.msgId}`)
         }
@@ -375,10 +512,10 @@ struct Main {
             ListItem() {
               Row({ space: 12 }) {
                 Text('🗄').fontSize(24).width(54).height(54).textAlign(TextAlign.Center).borderRadius(27)
-                  .backgroundColor('#E0E4EA')
+                  .backgroundColor($r('app.color.chip'))
                 Column() {
-                  Text('归档的聊天').fontSize(16).fontWeight(FontWeight.Medium)
-                  Text(`${this.archiveCount} 个聊天`).fontSize(13).fontColor('#888888')
+                  Text('归档的聊天').fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+                  Text(`${this.archiveCount} 个聊天`).fontSize(13).fontColor($r('app.color.text_secondary'))
                 }
                 .alignItems(HorizontalAlign.Start)
               }
@@ -390,19 +527,21 @@ struct Main {
           ForEach(this.rows, (row: ChatRowData) => {
             ListItem() {
               ChatRow({ row: row })
-                .onClick(() => this.openChat(row.chat.id))
+                .onClick(() => this.nav.openRootChat(row.chat.id))
                 .gesture(LongPressGesture().onAction(() => this.chatMenu(row)))
             }
-            .backgroundColor(this.wide() && row.chat.id === this.open.chatId ? '#1F3A8DDE' : Color.Transparent)
+            .backgroundColor(this.split() && this.stack.length > 0 && this.stack[0].kind === 'chat' &&
+              this.stack[0].chatId === row.chat.id ? $r('app.color.accent_soft') : Color.Transparent)
           }, (row: ChatRowData) => row.key)
         }
         .layoutWeight(1)
-        .divider({ strokeWidth: 0.5, color: $r('sys.color.ohos_id_color_list_separator'), startMargin: 80 })
+        .divider({ strokeWidth: 0.5, color: $r('app.color.separator'), startMargin: 80 })
         .onReachEnd(() => this.acc.chats.loadMore(this.folderId))
       }
     }
-    .width(this.listWidth())
+    .width(this.split() ? this.listW() : '100%')
     .height('100%')
-    .backgroundColor($r('sys.color.ohos_id_color_background'))
+    .backgroundColor($r('app.color.page_bg'))
+    .visibility(this.split() || this.stack.length === 0 ? Visibility.Visible : Visibility.None)
   }
 }

@@ -3,19 +3,24 @@ import { common, abilityAccessCtrl, Permissions, PermissionRequestResult } from 
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { picker, fileIo as fs } from '@kit.CoreFileKit';
 import { media } from '@kit.MediaKit';
+import { camera, cameraPicker } from '@kit.CameraKit';
 import { geoLocationManager } from '@kit.LocationKit';
 import { AlbumItem, BubbleActions, BubbleData, MessageBubble } from './MessageBubble';
+import { ActionPanel, PanelItem } from './ActionPanel';
 import { Avatar } from './Avatar';
 import { StickerPanel } from './StickerPanel';
 import { AppState, copyText, ForwardRequest, ViewerItem } from '../common/AppState';
-import { copyToCache, fileNameOf, formatDay, lastSeen } from '../common/Util';
-import { pickAction } from '../common/Menu';
-import { Account } from '../td/Account';
+import { bubbleMaxWidth, columnsFor, mediaMaxHeight, mediaWidth, panelHeight, stickerSide } from '../common/Layout';
+import { diffLists, DiffOp, OP_ADD, OP_DELETE } from '../common/ListDiff';
+import { Nav, RouteController } from '../common/Nav';
+import { normalizeTag, snippetAround } from '../common/Tags';
+import { copyToCache, fileNameOf, formatDay, formatTime, lastSeen } from '../common/Util';
+import { Account, LinkTarget } from '../td/Account';
 import { Accounts } from '../td/Accounts';
 import { AccountEvent } from '../td/Core';
-import { ChatItem, InlineButton, MsgItem } from '../td/Models';
+import { ChatItem, InlineButton, MsgItem, ReactionItem } from '../td/Models';
 import { formatTimer, summary } from '../td/Parse';
-import { SendOptions } from '../td/MessageStore';
+import { MessageStore, OpenOptions, SearchPage, SendOptions, StoreEvent } from '../td/MessageStore';
 import { TdError, TdObject } from '../td/TdClient';
 import { AudioService, VoiceRecorder } from '../services/AudioService';
 import { EncodedVoice } from 'libtdbridge.so';
@@ -25,34 +30,118 @@ class ReplyPreview {
   text: string = '';
 }
 
+// A search result listed in the in-chat search panel.
+class Hit {
+  id: number = 0;
+  name: string = '';
+  date: number = 0;
+  text: string = '';
+}
+
+class MenuState {
+  seq: number = 0;
+  title: string = '';
+  emojis: string[] = [];
+  chosen: string[] = [];
+  items: PanelItem[] = [];
+  onEmoji: (emoji: string) => void = (): void => {};
+}
+
+interface BottomP {
+  label: string;
+  fn: () => void;
+}
+
+class MediaPick {
+  path: string = '';
+  video: boolean = false;
+}
+
 function isAlbumKind(m: MsgItem): boolean {
   return m.kind === 'photo' || m.kind === 'video';
 }
 
 const QUICK_REACTIONS: string[] = ['👍', '❤', '😂', '😮', '😢', '🔥', '👏', '🎉'];
 const AUTO_DELETE_OPTIONS: number[] = [0, 5, 30, 60, 3600, 86400, 604800];
+const MUTE_FOREVER = 0x7FFFFFFF;
+const KEY_ENTER = 2054;
 
-// Lets the hosting page forward the system back gesture to the chat.
-export class ChatController {
-  back: () => boolean = (): boolean => false;
+// Rows of the message list. Changes are reported item by item so the list
+// keeps the reading position when older messages are inserted above.
+class BubbleSource implements IDataSource {
+  private list: BubbleData[] = [];
+  private listeners: DataChangeListener[] = [];
+
+  totalCount(): number {
+    return this.list.length;
+  }
+
+  getData(index: number): BubbleData {
+    return this.list[index];
+  }
+
+  registerDataChangeListener(listener: DataChangeListener): void {
+    if (!this.listeners.includes(listener)) {
+      this.listeners.push(listener);
+    }
+  }
+
+  unregisterDataChangeListener(listener: DataChangeListener): void {
+    this.listeners = this.listeners.filter((l: DataChangeListener) => l !== listener);
+  }
+
+  items(): BubbleData[] {
+    return this.list;
+  }
+
+  update(next: BubbleData[]): void {
+    const old = this.list;
+    const ops: DiffOp[] | null = diffLists(old.map((b: BubbleData) => b.id), old.map((b: BubbleData) => b.key),
+      next.map((b: BubbleData) => b.id), next.map((b: BubbleData) => b.key));
+    this.list = next;
+    const oldIds = new Set<number>(old.map((b: BubbleData) => b.id));
+    const shared = next.some((b: BubbleData) => oldIds.has(b.id));
+    // A window with nothing in common (first load, jump elsewhere) reloads.
+    if (ops === null || !shared) {
+      for (const l of this.listeners) {
+        l.onDataReloaded();
+      }
+      return;
+    }
+    for (const op of ops) {
+      for (const l of this.listeners) {
+        if (op.type === OP_ADD) {
+          l.onDataAdd(op.index);
+        } else if (op.type === OP_DELETE) {
+          l.onDataDelete(op.index);
+        } else {
+          l.onDataChange(op.index);
+        }
+      }
+    }
+  }
 }
 
-// One open conversation. Hosted full-screen by pages/Chat, or as the right
-// pane (wide windows) / the whole window (narrow windows) by pages/Main.
+// One open conversation, shown in the detail pane: beside the chat list on
+// wide windows, over it on narrow ones. Every view owns its message store.
 @Component
 export struct ChatView {
   chatId: number = 0;
   messageId: number = 0;
   topicId: number = 0;    // forum topic shown, 0 for an ordinary chat
   topicName: string = '';
-  showBack: boolean = true;
-  controller: ChatController = new ChatController();
+  readFrom: number = 0;    // topics: last read incoming message
+  unreadCount: number = 0; // topics: unread messages
+  nav: Nav = new Nav();
+  controller: RouteController = new RouteController();
   onBack: () => void = (): void => {};
-  onOpenChat: (chatId: number) => void = (): void => {};
+  @Prop showBack: boolean = true;
+  // False while another route covers this chat: nothing is marked as read.
+  @Prop @Watch('onActiveChanged') active: boolean = true;
   @State title: string = '';
   @State subtitle: string = '';
   @State photo: string = '';
-  @State bubbles: BubbleData[] = [];
+  @State count: number = -1; // rows shown; -1 until the first page arrives
   @State draft: string = '';
   @State replyTo: MsgItem | null = null;
   @State editing: MsgItem | null = null;
@@ -60,89 +149,164 @@ export struct ChatView {
   @State pinnedText: string = '';
   @State secretBanner: string = '';
   @State canSend: boolean = true;
+  @State joinable: boolean = false;
+  @State muted: boolean = false;
   @State showPanel: boolean = false;
   @State showAttach: boolean = false;
   @State recording: boolean = false;
   @State recordSecs: number = 0;
   @State showScrollDown: boolean = false;
-  @State searchMode: boolean = false;
+  @State unread: number = 0;
+  @State paneW: number = 360;
+  @State paneH: number = 640;
+  @State menus: MenuState[] = []; // zero or one, keyed so each menu is a fresh panel
+  @State searchOpen: boolean = false;
   @State searchQuery: string = '';
-  private session: number = 0;
+  @State hits: Hit[] = [];
+  @State hitId: number = 0;
+  @State searchTotal: number = 0;
+  @State searchBusy: boolean = false;
+  @State playerOn: boolean = false;
+  @State playerTitle: string = '';
+  @State playerPlaying: boolean = false;
+  @State playerSpeed: number = 1;
   private chat: ChatItem | undefined = undefined;
   private acc: Account = Accounts.get().active();
+  private store: MessageStore = Accounts.get().active().store(0);
+  private source: BubbleSource = new BubbleSource();
+  private bubbleActions: BubbleActions | null = null;
   private audioPlayer: AudioService = AudioService.get();
   private recorder: VoiceRecorder = new VoiceRecorder();
   private recordTimer: number = -1;
   private scroller: Scroller = new Scroller();
+  private hitScroller: Scroller = new Scroller();
+  private input: TextAreaController = new TextAreaController();
   private listener = (e: AccountEvent): void => this.onEvent(e);
-  private audioListener = (): void => this.rebuild(false);
+  private audioListener = (): void => this.onAudio();
   private replyCache: Map<number, ReplyPreview> = new Map();
   private translations: Map<number, string> = new Map();
   private atBottom: boolean = true;
   private firstLoad: boolean = true;
   private pendingJump: number = 0;
+  private highlightId: number = 0;
+  private highlightTimer: number = -1;
   private lastShownId: number = 0;
   private lastTyping: number = 0;
-  private searchResults: number[] = [];
-  private searchIndex: number = 0;
+  private visStart: number = 0;
+  private visEnd: number = -1;
+  private viewTimer: number = -1;
+  private menuSeq: number = 0;
+  private searchSeq: number = 0;
+  private searchNext: string = '';
+  private searchedFor: string = '';
 
   aboutToAppear(): void {
+    this.bubbleActions = this.makeActions();
     this.pendingJump = this.messageId;
+    this.highlightId = this.messageId;
     this.controller.back = (): boolean => this.handleBack();
+    this.controller.jumpTo = (id: number): void => this.jumpTo(id);
     this.chat = this.acc.chat(this.chatId);
     this.draft = this.chat && !this.topicId ? this.chat.draft : '';
+    const opt = new OpenOptions();
+    opt.messageId = this.messageId;
+    if (this.topicId) {
+      opt.lastReadId = this.readFrom;
+      opt.unread = this.unreadCount;
+    } else if (this.chat) {
+      opt.lastReadId = this.chat.lastReadInboxId;
+      opt.unread = this.chat.unread;
+    }
+    this.store = this.acc.openSession(this.chatId, this.topicId, opt);
+    this.store.onChange = (e: StoreEvent): void => this.onStore(e);
+    Accounts.get().clearNotifications(this.acc, this.chatId);
     this.acc.on(this.listener);
     this.audioPlayer.on(this.audioListener);
     this.audioPlayer.onEnded = (key: string) => this.playNextVoice(key);
-    this.session = this.acc.messages.open(this.chatId, this.topicId);
     this.refreshHeader();
-    if (this.pendingJump) {
-      this.jumpTo(this.pendingJump);
+    this.onAudio();
+    if (this.chat) {
+      this.acc.notMember(this.chat).then((left: boolean) => {
+        this.joinable = left;
+      }).catch(() => {});
     }
   }
 
   aboutToDisappear(): void {
-    // Drafts are per chat; a topic's draft would overwrite the chat's.
+    // Drafts are kept per chat; a topic's draft would overwrite the chat's.
     if (this.chat && !this.topicId && !this.editing && this.draft !== this.chat.draft) {
-      this.acc.messages.setDraft(this.chatId, this.draft.trim(), this.replyTo ? this.replyTo.id : 0);
+      this.store.setDraft(this.draft.trim(), this.replyTo ? this.replyTo.id : 0);
     }
     this.acc.off(this.listener);
     this.audioPlayer.off(this.audioListener);
-    this.acc.messages.close(this.session);
+    this.acc.closeSession(this.store);
+    clearTimeout(this.viewTimer);
+    clearTimeout(this.highlightTimer);
     if (this.recording) {
+      clearInterval(this.recordTimer);
       this.recorder.stop(true);
     }
   }
 
   handleBack(): boolean {
+    if (this.menus.length > 0) {
+      this.menus = [];
+      return true;
+    }
     if (this.selected.length > 0) {
       this.selected = [];
       this.rebuild(false);
       return true;
     }
-    if (this.showPanel || this.showAttach || this.searchMode) {
+    if (this.showPanel || this.showAttach || this.searchOpen) {
       this.showPanel = false;
       this.showAttach = false;
-      this.searchMode = false;
+      this.searchOpen = false;
       return true;
     }
     return false;
   }
 
+  onActiveChanged(): void {
+    if (this.active) {
+      this.scheduleView();
+    }
+  }
+
   onEvent(e: AccountEvent): void {
-    if (e === 'messages' || e === 'files') {
-      this.rebuild(e === 'messages');
-    } else if (e === 'typing' || e === 'chats') {
+    if (e === 'files') {
+      this.rebuild(false);
+    } else if (e === 'typing' || e === 'chats' || e === 'connection') {
       this.refreshHeader();
-    } else if (e === 'pinned') {
-      const p = this.acc.messages.pinned;
+    }
+  }
+
+  private onStore(e: StoreEvent): void {
+    if (e === 'messages') {
+      this.rebuild(true);
+    } else {
+      const p = this.store.pinned;
       this.pinnedText = p ? summary(p) : '';
     }
+  }
+
+  private onAudio(): void {
+    const a = this.audioPlayer;
+    this.playerOn = a.hasTrack();
+    this.playerTitle = a.title;
+    this.playerPlaying = a.playing;
+    this.playerSpeed = a.speed;
+    this.rebuild(false);
   }
 
   private ctx(): common.UIAbilityContext {
     return getContext(this) as common.UIAbilityContext;
   }
+
+  private toast(message: string): void {
+    promptAction.showToast({ message: message });
+  }
+
   private refreshHeader(): void {
     const c = this.acc.chat(this.chatId);
     if (!c) {
@@ -152,17 +316,23 @@ export struct ChatView {
     this.title = this.topicId ? this.topicName : (c.userId === this.acc.myUserId ? '收藏夹' : c.title);
     this.photo = c.photoPath || this.acc.files.path(c.photoFileId);
     this.canSend = c.canSend;
+    this.muted = this.acc.chats.isMuted(c);
+    this.unread = this.topicId ? 0 : c.unread;
     const typing = this.acc.chats.typingText(c.id);
-    if (typing) {
+    const conn = this.acc.connection;
+    if (conn !== 'ready') {
+      this.subtitle = conn === 'waiting' ? '等待网络…' : (conn === 'proxy' ? '正在连接代理…' :
+        (conn === 'updating' ? '正在更新…' : '正在连接…'));
+    } else if (typing) {
       this.subtitle = typing;
     } else if (c.userId) {
       const u = this.acc.user(c.userId);
-      this.subtitle = u ? (u.isBot ? '机器人' : lastSeen(u.status)) : '';
+      this.subtitle = c.userId === this.acc.myUserId ? '' : (u ? (u.isBot ? '机器人' : lastSeen(u.status)) : '');
     } else {
       this.subtitle = this.topicId ? c.title : (c.type === 'channel' ? '频道' : '群组');
     }
-    if (c.autoDeleteTime) {
-      this.subtitle += ` · ${formatTimer(c.autoDeleteTime)}后自动删除`;
+    if (c.autoDeleteTime && conn === 'ready') {
+      this.subtitle += `${this.subtitle ? ' · ' : ''}${formatTimer(c.autoDeleteTime)}后自动删除`;
     }
     if (c.type === 'secret') {
       const s = this.acc.chats.secretChats.get(c.secretChatId);
@@ -178,13 +348,13 @@ export struct ChatView {
     if (cached) {
       return cached;
     }
-    const local = this.acc.messages.find(m.replyToId);
+    const local = this.store.find(m.replyToId);
     if (local) {
       return this.previewOf(local);
     }
     const placeholder = new ReplyPreview();
     this.replyCache.set(m.replyToId, placeholder);
-    this.acc.messages.fetch(m.chatId, m.replyToId).then((r: MsgItem) => {
+    this.store.fetch(m.chatId, m.replyToId).then((r: MsgItem) => {
       this.replyCache.set(m.replyToId, this.previewOf(r));
       this.rebuild(false);
     }).catch(() => {
@@ -209,12 +379,13 @@ export struct ChatView {
   }
 
   rebuild(messagesChanged: boolean): void {
-    const msgs = this.acc.messages.messages;
+    const msgs = this.store.messages;
     const isGroup = this.chat !== undefined && (this.chat.type === 'group' || this.chat.type === 'supergroup');
     const readUpTo = this.chat ? this.chat.lastReadOutboxId : 0;
     const settings = Accounts.get().settings;
     const prevLastId = this.lastShownId;
     const files = this.acc.files;
+    const firstUnread = this.store.firstUnreadId;
     const resolve = (m: MsgItem): AlbumItem => {
       const it = new AlbumItem(m);
       it.filePath = this.autoDownload(m) ? (m.filePath || files.path(m.fileId, 8)) : files.known(m.fileId, m.filePath);
@@ -259,6 +430,8 @@ export struct ChatView {
       d.playPos = d.playing && this.audioPlayer.duration > 0 ? this.audioPlayer.position / this.audioPlayer.duration : 0;
       d.translated = this.translations.get(m.id) ?? '';
       d.selected = group.some((x: MsgItem) => this.selected.includes(x.id));
+      d.highlight = this.highlightId !== 0 && group.some((x: MsgItem) => x.id === this.highlightId);
+      d.unreadDivider = firstUnread !== 0 && group.some((x: MsgItem) => x.id === firstUnread);
       d.autoplay = settings.autoplayGifs;
       if (!prev || formatDay(prev.date) !== formatDay(m.date)) {
         d.dayLabel = formatDay(m.date);
@@ -266,38 +439,86 @@ export struct ChatView {
       out.push(d.seal());
       i = j;
     }
-    this.bubbles = out;
+    this.source.update(out);
+    this.count = messagesChanged || this.count >= 0 ? out.length : this.count;
     const lastId = msgs.length > 0 ? msgs[msgs.length - 1].id : 0;
     this.lastShownId = lastId;
-    if (!messagesChanged || this.bubbles.length === 0) {
+    if (!messagesChanged || out.length === 0) {
       return;
     }
+    this.scheduleView();
     if (this.pendingJump) {
-      const idx = this.bubbles.findIndex((b: BubbleData) => b.ids().includes(this.pendingJump));
+      const idx = out.findIndex((b: BubbleData) => b.ids().includes(this.pendingJump));
       if (idx >= 0) {
         this.pendingJump = 0;
         this.firstLoad = false;
+        this.atBottom = false;
         setTimeout((): void => { this.scroller.scrollToIndex(idx, false, ScrollAlign.CENTER); }, 0);
+        this.fadeHighlight();
       }
       return;
     }
-    if (this.firstLoad || (lastId !== prevLastId && this.atBottom)) {
+    if (this.firstLoad) {
       this.firstLoad = false;
-      setTimeout((): void => { this.scroller.scrollToIndex(this.bubbles.length - 1); }, 0);
+      const idx = firstUnread ? out.findIndex((b: BubbleData) => b.unreadDivider) : -1;
+      if (idx >= 0) {
+        // Open where reading stopped: the "unread messages" line at the top.
+        this.atBottom = false;
+        setTimeout((): void => { this.scroller.scrollToIndex(idx, false, ScrollAlign.START); }, 0);
+      } else {
+        setTimeout((): void => { this.scroller.scrollToIndex(out.length - 1, false, ScrollAlign.END); }, 0);
+      }
+      return;
+    }
+    if (lastId !== prevLastId && this.atBottom) {
+      setTimeout((): void => { this.scroller.scrollToIndex(out.length - 1, true, ScrollAlign.END); }, 0);
     }
   }
 
+  // Reports the messages on screen so TDLib moves the read position there.
+  private scheduleView(): void {
+    if (this.viewTimer >= 0) {
+      return;
+    }
+    this.viewTimer = setTimeout(() => {
+      this.viewTimer = -1;
+      if (!this.active || !Accounts.get().appInForeground || this.visEnd < 0) {
+        return;
+      }
+      const rows = this.source.items();
+      const ids: number[] = [];
+      for (let i = Math.max(0, this.visStart); i <= this.visEnd && i < rows.length; i++) {
+        for (const id of rows[i].ids()) {
+          ids.push(id);
+        }
+      }
+      this.store.view(ids);
+    }, 250);
+  }
+
+  private fadeHighlight(): void {
+    clearTimeout(this.highlightTimer);
+    this.highlightTimer = setTimeout(() => {
+      this.highlightId = 0;
+      this.rebuild(false);
+    }, 1800);
+  }
+
   jumpTo(id: number): void {
-    const idx = this.bubbles.findIndex((b: BubbleData) => b.ids().includes(id));
+    this.highlightId = id;
+    const idx = this.source.items().findIndex((b: BubbleData) => b.ids().includes(id));
     if (idx >= 0) {
+      this.rebuild(false);
       this.scroller.scrollToIndex(idx, true, ScrollAlign.CENTER);
+      this.fadeHighlight();
       return;
     }
     this.pendingJump = id;
-    this.acc.messages.jumpTo(id).then((ok: boolean) => {
+    this.store.jumpTo(id).then((ok: boolean) => {
       if (!ok) {
         this.pendingJump = 0;
-        promptAction.showToast({ message: '找不到原消息' });
+        this.highlightId = 0;
+        this.toast('找不到这条消息');
       }
     }).catch(() => {
       this.pendingJump = 0;
@@ -305,13 +526,15 @@ export struct ChatView {
   }
 
   scrollToBottom(): void {
-    if (!this.acc.messages.atLatest) {
+    if (!this.store.atLatest) {
       this.firstLoad = true;
-      this.acc.messages.jumpToLatest();
+      this.store.firstUnreadId = 0;
+      this.store.jumpToLatest();
     } else {
-      this.scroller.scrollToIndex(this.bubbles.length - 1, true);
+      this.scroller.scrollToIndex(this.source.totalCount() - 1, true, ScrollAlign.END);
     }
   }
+
   // ---- Sending ----
 
   private opts(silent: boolean = false): SendOptions {
@@ -321,7 +544,13 @@ export struct ChatView {
   private after(p: Promise<Object>): void {
     this.atBottom = true;
     this.replyTo = null;
-    p.catch((e: TdError) => promptAction.showToast({ message: `发送失败：${e.message}` }));
+    if (this.store.firstUnreadId) {
+      this.store.firstUnreadId = 0;
+    }
+    if (!this.store.atLatest) {
+      this.firstLoad = true;
+    }
+    p.catch((e: TdError) => this.toast(`发送失败：${e.message}`));
   }
 
   sendText(silent: boolean = false): void {
@@ -334,12 +563,14 @@ export struct ChatView {
       const m = this.editing;
       this.editing = null;
       this.draft = '';
-      this.acc.messages.editText(m, text, md).catch((e: TdError) => promptAction.showToast({ message: e.message }));
+      this.store.editText(m, text, md).catch((e: TdError) => this.toast(e.message));
       return;
     }
     this.draft = '';
-    this.after(this.acc.messages.sendText(text, this.opts(silent), md));
-    this.acc.messages.setDraft(this.chatId, '', 0);
+    this.after(this.store.sendText(text, this.opts(silent), md));
+    if (!this.topicId) {
+      this.store.setDraft('', 0);
+    }
   }
 
   onDraftChange(v: string): void {
@@ -347,39 +578,21 @@ export struct ChatView {
     const now = Date.now();
     if (v && now - this.lastTyping > 4000 && !Accounts.get().settings.ghostMode) {
       this.lastTyping = now;
-      this.acc.messages.sendTyping('chatActionTyping');
+      this.store.sendTyping('chatActionTyping');
     }
   }
 
-  pickMedia(): void {
+  private closePanels(): void {
     this.showAttach = false;
-    const opts = new photoAccessHelper.PhotoSelectOptions();
-    opts.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_VIDEO_TYPE;
-    opts.maxSelectNumber = 10;
-    new photoAccessHelper.PhotoViewPicker().select(opts).then((res: photoAccessHelper.PhotoSelectResult) => {
-      const caption = this.draft.trim();
-      this.draft = '';
-      res.photoUris.forEach((uri: string, i: number) => {
-        const name = fileNameOf(uri) || `media_${i}`;
-        const path = copyToCache(this.ctx(), uri, name);
-        const cap = i === 0 ? caption : '';
-        if (/\.(mp4|mov|3gp|mkv|webm)$/i.test(name)) {
-          this.sendVideoFile(path, cap);
-        } else {
-          this.after(this.acc.messages.sendPhoto(path, cap, this.opts(), false, 0));
-        }
-      });
-    }).catch((e: Error) => promptAction.showToast({ message: `选择失败：${e.message}` }));
+    this.showPanel = false;
   }
 
-  // Reads width, height and duration so the video gets a proper player bubble.
-  private sendVideoFile(path: string, caption: string): void {
-    media.createAVMetadataExtractor().then((ex: media.AVMetadataExtractor) => {
+  // Reads width, height and duration so a video gets a proper player bubble.
+  private videoContent(path: string, caption: string): Promise<TdObject> {
+    return media.createAVMetadataExtractor().then((ex: media.AVMetadataExtractor) => {
       const file = fs.openSync(path, fs.OpenMode.READ_ONLY);
       ex.fdSrc = { fd: file.fd };
       return ex.fetchMetadata().then((meta: media.AVMetadata) => {
-        ex.release();
-        fs.closeSync(file);
         let w = Number(meta.videoWidth ?? 0);
         let h = Number(meta.videoHeight ?? 0);
         if (meta.videoOrientation === '90' || meta.videoOrientation === '270') {
@@ -387,15 +600,73 @@ export struct ChatView {
           w = h;
           h = t;
         }
-        this.after(this.acc.messages.sendVideo(path, caption, this.opts(), w, h, Number(meta.duration ?? 0) / 1000, false));
+        return this.store.videoContent(path, caption, w, h, Number(meta.duration ?? 0) / 1000);
+      }).finally(() => {
+        ex.release();
+        fs.closeSync(file);
       });
-    }).catch(() => {
-      this.after(this.acc.messages.sendVideo(path, caption, this.opts(), 0, 0, 0, false));
+    }).catch(() => this.store.videoContent(path, caption, 0, 0, 0));
+  }
+
+  // Several photos and videos go out together as one album.
+  private sendMedia(picks: MediaPick[], caption: string): void {
+    if (picks.length === 0) {
+      return;
+    }
+    const opts = this.opts();
+    const jobs = picks.map((p: MediaPick, i: number): Promise<TdObject> => {
+      const cap = i === 0 ? caption : '';
+      return p.video ? this.videoContent(p.path, cap) : Promise.resolve(this.store.photoContent(p.path, cap, false, 0));
     });
+    Promise.all(jobs).then((contents: TdObject[]) => {
+      if (this.chat && this.chat.type === 'secret') {
+        for (const c of contents) {
+          this.after(this.store.sendAlbum([c], opts));
+        }
+      } else {
+        this.after(this.store.sendAlbum(contents, opts));
+      }
+    }).catch(() => this.toast('发送失败'));
+  }
+
+  pickMedia(): void {
+    this.closePanels();
+    const opts = new photoAccessHelper.PhotoSelectOptions();
+    opts.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_VIDEO_TYPE;
+    opts.maxSelectNumber = 10;
+    new photoAccessHelper.PhotoViewPicker().select(opts).then((res: photoAccessHelper.PhotoSelectResult) => {
+      const picks = res.photoUris.map((uri: string, i: number) => {
+        const name = fileNameOf(uri) || `media_${i}`;
+        const p = new MediaPick();
+        p.path = copyToCache(this.ctx(), uri, name);
+        p.video = /\.(mp4|mov|3gp|mkv|webm)$/i.test(name);
+        return p;
+      });
+      if (picks.length > 0) {
+        const caption = this.draft.trim();
+        this.draft = '';
+        this.sendMedia(picks, caption);
+      }
+    }).catch((e: Error) => this.toast(`选择失败：${e.message}`));
+  }
+
+  takePhoto(): void {
+    this.closePanels();
+    const profile: cameraPicker.PickerProfile = { cameraPosition: camera.CameraPosition.CAMERA_POSITION_BACK };
+    cameraPicker.pick(this.ctx(), [cameraPicker.PickerMediaType.PHOTO, cameraPicker.PickerMediaType.VIDEO], profile)
+      .then((res: cameraPicker.PickerResult) => {
+        if (res.resultCode !== 0 || !res.resultUri) {
+          return;
+        }
+        const p = new MediaPick();
+        p.video = res.mediaType === cameraPicker.PickerMediaType.VIDEO;
+        p.path = copyToCache(this.ctx(), res.resultUri, p.video ? 'camera.mp4' : 'camera.jpg');
+        this.sendMedia([p], '');
+      }).catch((e: Error) => this.toast(`无法打开相机：${e.message}`));
   }
 
   pickSelfDestructPhoto(): void {
-    this.showAttach = false;
+    this.closePanels();
     const opts = new photoAccessHelper.PhotoSelectOptions();
     opts.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE;
     opts.maxSelectNumber = 1;
@@ -404,40 +675,43 @@ export struct ChatView {
         return;
       }
       const path = copyToCache(this.ctx(), res.photoUris[0], fileNameOf(res.photoUris[0]) || 'photo.jpg');
-      this.after(this.acc.messages.sendPhoto(path, '', this.opts(), true, 10));
+      this.after(this.store.sendPhoto(path, '', this.opts(), true, 10));
     }).catch(() => {});
   }
 
   pickDocument(): void {
-    this.showAttach = false;
+    this.closePanels();
     const opts = new picker.DocumentSelectOptions();
     opts.maxSelectNumber = 10;
     new picker.DocumentViewPicker(this.ctx()).select(opts).then((uris: string[]) => {
       for (const uri of uris) {
         const path = copyToCache(this.ctx(), uri, fileNameOf(uri) || 'file');
-        this.after(this.acc.messages.sendDocument(path, '', this.opts()));
+        this.after(this.store.sendDocument(path, '', this.opts()));
       }
-    }).catch((e: Error) => promptAction.showToast({ message: `选择失败：${e.message}` }));
+    }).catch((e: Error) => this.toast(`选择失败：${e.message}`));
   }
 
   sendLocation(): void {
-    this.showAttach = false;
+    this.closePanels();
     const perms: Permissions[] = ['ohos.permission.APPROXIMATELY_LOCATION', 'ohos.permission.LOCATION'];
     abilityAccessCtrl.createAtManager().requestPermissionsFromUser(this.ctx(), perms).then(() => {
       return geoLocationManager.getCurrentLocation();
     }).then((loc: geoLocationManager.Location) => {
-      this.after(this.acc.messages.sendLocation(loc.latitude, loc.longitude, this.opts()));
-    }).catch(() => promptAction.showToast({ message: '无法获取位置' }));
+      this.after(this.store.sendLocation(loc.latitude, loc.longitude, this.opts()));
+    }).catch(() => this.toast('无法获取位置'));
   }
 
   createPoll(): void {
-    this.showAttach = false;
-    router.pushUrl({ url: 'pages/CreatePoll', params: { chatId: this.chatId } });
+    this.closePanels();
+    const r = this.nav.push('poll');
+    r.chatId = this.chatId;
+    r.topicId = this.topicId;
+    this.nav.commit();
   }
 
   sendDice(emoji: string): void {
-    this.showAttach = false;
-    this.after(this.acc.messages.sendDice(emoji, this.opts()));
+    this.closePanels();
+    this.after(this.store.sendDice(emoji, this.opts()));
   }
 
   // ---- Voice recording: hold the mic button, slide up to cancel ----
@@ -456,10 +730,10 @@ export struct ChatView {
         this.recordTimer = setInterval(() => {
           this.recordSecs = Math.floor((Date.now() - this.recorder.startedAt) / 1000);
           if (this.recordSecs % 4 === 0 && !Accounts.get().settings.ghostMode) {
-            this.acc.messages.sendTyping('chatActionRecordingVoiceNote');
+            this.store.sendTyping('chatActionRecordingVoiceNote');
           }
         }, 500);
-      }).catch(() => promptAction.showToast({ message: '无法录音，请检查麦克风权限' }));
+      }).catch(() => this.toast('无法录音，请检查麦克风权限'));
   }
 
   stopRecording(cancel: boolean): void {
@@ -471,10 +745,11 @@ export struct ChatView {
     const path = this.recorder.path;
     this.recorder.stop(cancel).then((res: EncodedVoice | null) => {
       if (res) {
-        this.after(this.acc.messages.sendVoice(path, res.duration, res.waveform, this.opts()));
+        this.after(this.store.sendVoice(path, res.duration, res.waveform, this.opts()));
       }
     });
   }
+
   // ---- Media interaction ----
 
   openMedia(d: BubbleData): void {
@@ -504,11 +779,11 @@ export struct ChatView {
       }
     }
     if (m.selfDestructTime) {
-      this.acc.messages.opened(m);
+      this.store.markOpened(m);
     }
     // Pager over every visual message of the loaded window, albums flattened.
     const visual: AlbumItem[] = [];
-    for (const b of this.bubbles) {
+    for (const b of this.source.items()) {
       if (b.album.length > 0) {
         b.album.forEach((a: AlbumItem) => visual.push(a));
       } else if (b.msg.kind === 'photo' || b.msg.kind === 'video' || b.msg.kind === 'animation') {
@@ -539,7 +814,7 @@ export struct ChatView {
       return;
     }
     if (!m.listened && !m.outgoing) {
-      this.acc.messages.opened(m);
+      this.store.markOpened(m);
     }
     const isOpus = m.kind === 'voice' && (m.mime === 'audio/ogg' || m.mime === '' || d.filePath.endsWith('.oga') ||
       d.filePath.endsWith('.ogg'));
@@ -554,17 +829,19 @@ export struct ChatView {
       }
       return;
     }
-    this.audioPlayer.toggle(this.ctx(), `${m.chatId}:${m.id}`, d.filePath, isOpus, m.title || '语音消息');
+    const name = m.kind === 'voice' ? `${d.senderName || '我'} 的语音` : (m.title || '音乐');
+    this.audioPlayer.toggle(this.ctx(), `${m.chatId}:${m.id}`, d.filePath, isOpus, name);
   }
 
-  // After a voice note ends, continue with the next unplayed one like official apps.
+  // After a voice note ends, continue with the next one like official apps.
   private playNextVoice(key: string): void {
-    const idx = this.bubbles.findIndex((b: BubbleData) => `${b.msg.chatId}:${b.msg.id}` === key);
+    const rows = this.source.items();
+    const idx = rows.findIndex((b: BubbleData) => `${b.msg.chatId}:${b.msg.id}` === key);
     if (idx < 0) {
       return;
     }
-    for (let i = idx + 1; i < this.bubbles.length; i++) {
-      const b = this.bubbles[i];
+    for (let i = idx + 1; i < rows.length; i++) {
+      const b = rows[i];
       if (b.msg.kind === 'voice' && b.filePath) {
         this.playAudio(b);
         return;
@@ -594,8 +871,8 @@ export struct ChatView {
       } finally {
         fs.closeSync(dst);
       }
-      promptAction.showToast({ message: '已保存' });
-    }).catch((e: Error) => promptAction.showToast({ message: `保存失败：${e.message}` }));
+      this.toast('已保存');
+    }).catch((e: Error) => this.toast(`保存失败：${e.message}`));
   }
 
   openLocation(d: BubbleData): void {
@@ -608,7 +885,7 @@ export struct ChatView {
   openContact(d: BubbleData): void {
     if (d.msg.contactUserId) {
       this.acc.privateChatWith(d.msg.contactUserId).then((id: number) => {
-        this.onOpenChat(id);
+        this.nav.openChat(id);
       }).catch(() => {});
     } else {
       copyText(d.msg.phone, '已复制电话号码');
@@ -616,7 +893,7 @@ export struct ChatView {
   }
 
   vote(d: BubbleData, option: number): void {
-    this.acc.messages.vote(d.msg, [option]).catch((e: TdError) => promptAction.showToast({ message: e.message }));
+    this.store.vote(d.msg, [option]).catch((e: TdError) => this.toast(e.message));
   }
 
   pressButton(d: BubbleData, b: InlineButton): void {
@@ -625,7 +902,7 @@ export struct ChatView {
       return;
     }
     if (b.data) {
-      this.acc.messages.callback(d.msg, b.data).then((r: TdObject) => {
+      this.store.callback(d.msg, b.data).then((r: TdObject) => {
         const text = r['text'] as string;
         const url = r['url'] as string;
         if (url) {
@@ -634,20 +911,49 @@ export struct ChatView {
           if (r['show_alert']) {
             promptAction.showDialog({ message: text, buttons: [{ text: '好', color: '#3A8DDE' }] });
           } else {
-            promptAction.showToast({ message: text });
+            this.toast(text);
           }
         }
       }).catch(() => {});
     }
   }
 
+  private openTarget(t: LinkTarget): void {
+    if (t.proxy) {
+      const mgr = Accounts.get();
+      mgr.settings.proxies.push(t.proxy);
+      mgr.saveSettings();
+      this.toast('代理已保存，可在“设置 > 代理”中启用');
+      this.nav.push('proxy');
+      this.nav.commit();
+    } else if (t.invite) {
+      promptAction.showDialog({
+        title: `加入“${t.inviteTitle}”？`,
+        buttons: [{ text: '取消', color: '#888888' }, { text: '加入', color: '#3A8DDE' }]
+      }).then((r: promptAction.ShowDialogSuccessResponse) => {
+        if (r.index !== 1) {
+          return;
+        }
+        this.acc.joinByLink(t.invite).then((chatId: number) => {
+          if (chatId) {
+            this.nav.openChat(chatId);
+          } else {
+            this.toast('已发送加入申请');
+          }
+        }).catch((e: TdError) => this.toast(e.message));
+      });
+    } else if (t.chatId === this.chatId && t.messageId) {
+      this.jumpTo(t.messageId);
+    } else if (t.chatId) {
+      this.nav.openChat(t.chatId, t.messageId);
+    } else {
+      this.toast('无法打开链接');
+    }
+  }
+
   openUrl(url: string): void {
     if (/^(https?:\/\/)?(t\.me|telegram\.me)\//i.test(url) || url.startsWith('tg:')) {
-      this.acc.openLink(url).then((chatId: number) => {
-        if (chatId) {
-          this.onOpenChat(chatId);
-        }
-      }).catch(() => promptAction.showToast({ message: '无法打开链接' }));
+      this.acc.openLink(url).then((t: LinkTarget) => this.openTarget(t)).catch(() => this.toast('无法打开链接'));
       return;
     }
     promptAction.showDialog({
@@ -655,22 +961,141 @@ export struct ChatView {
       buttons: [{ text: '复制', color: '#888888' }, { text: '打开', color: '#3A8DDE' }]
     }).then((r: promptAction.ShowDialogSuccessResponse) => {
       if (r.index === 1) {
-        this.ctx().openLink(url).catch(() => promptAction.showToast({ message: '没有可以打开此链接的应用' }));
+        this.ctx().openLink(url).catch(() => this.toast('没有可以打开此链接的应用'));
       } else {
         copyText(url);
       }
     });
   }
 
-  openMention(name: string, userId: number): void {
+  private openProfile(userId: number, chatId: number): void {
+    const r = this.nav.push('profile');
+    r.userId = userId;
+    r.chatId = chatId;
+    this.nav.commit();
+  }
+
+  openMention(name: string, userId: number, fromId: number): void {
     if (userId) {
-      router.pushUrl({ url: 'pages/Profile', params: { userId: userId } });
+      this.openProfile(userId, 0);
+    } else if (name.startsWith('#') || name.startsWith('$')) {
+      this.openSearch(normalizeTag(name), fromId);
     } else if (name.startsWith('@')) {
       this.openUrl(`https://t.me/${name.substring(1)}`);
     } else if (name.startsWith('/')) {
       this.draft = name + ' ';
     }
   }
+
+  // ---- Search inside the chat: typed text, or a tapped #hashtag ----
+
+  // fromId: the message a tag was tapped in; it is marked in the result list.
+  openSearch(query: string, fromId: number = 0): void {
+    this.closePanels();
+    this.input.stopEditing();
+    this.searchOpen = true;
+    this.searchQuery = query;
+    this.hitId = fromId;
+    if (query) {
+      this.runSearch(false);
+    } else {
+      this.hits = [];
+      this.searchTotal = 0;
+      this.searchedFor = '';
+    }
+  }
+
+  private toHit(m: MsgItem, query: string): Hit {
+    const h = new Hit();
+    h.id = m.id;
+    h.name = m.outgoing ? '我' : (this.acc.chats.nameOf(m.senderId, m.senderIsChat) || this.title);
+    h.date = m.date;
+    h.text = snippetAround(summary(m), query, 90);
+    return h;
+  }
+
+  // jumpToFirst: typed searches go straight to the newest match; a tapped
+  // tag only lists the matches, since the reader is already on one of them.
+  runSearch(jumpToFirst: boolean): void {
+    const q = this.searchQuery.trim();
+    if (!q) {
+      return;
+    }
+    const seq = ++this.searchSeq;
+    this.searchBusy = true;
+    this.searchedFor = q;
+    this.store.search(q, 'searchMessagesFilterEmpty', '').then((p: SearchPage) => {
+      if (seq !== this.searchSeq) {
+        return;
+      }
+      this.searchBusy = false;
+      this.searchNext = p.next;
+      this.searchTotal = Math.max(p.total, p.items.length);
+      this.hits = p.items.map((m: MsgItem) => this.toHit(m, q));
+      if (jumpToFirst && this.hits.length > 0) {
+        this.hitScroller.scrollEdge(Edge.Top);
+        this.selectHit(this.hits[0].id);
+      } else {
+        // Show where the tapped message sits among the matches.
+        const at = this.hits.findIndex((h: Hit) => h.id === this.hitId);
+        setTimeout((): void => { this.hitScroller.scrollToIndex(Math.max(0, at)); }, 0);
+      }
+    }).catch((e: TdError) => {
+      if (seq === this.searchSeq) {
+        this.searchBusy = false;
+        this.toast(`搜索失败：${e.message}`);
+      }
+    });
+  }
+
+  private moreHits(): Promise<void> {
+    const q = this.searchedFor;
+    if (!this.searchNext || this.searchBusy || !q) {
+      return Promise.resolve();
+    }
+    const seq = this.searchSeq;
+    this.searchBusy = true;
+    return this.store.search(q, 'searchMessagesFilterEmpty', this.searchNext).then((p: SearchPage) => {
+      if (seq !== this.searchSeq) {
+        return;
+      }
+      this.searchBusy = false;
+      this.searchNext = p.next;
+      const known = new Set<number>(this.hits.map((h: Hit) => h.id));
+      this.hits = this.hits.concat(p.items.filter((m: MsgItem) => !known.has(m.id)).map((m: MsgItem) => this.toHit(m, q)));
+    }).catch(() => {
+      this.searchBusy = false;
+    });
+  }
+
+  selectHit(id: number): void {
+    this.hitId = id;
+    this.jumpTo(id);
+  }
+
+  // delta 1 = the next older match, -1 = the next newer one.
+  stepHit(delta: number): void {
+    if (this.hits.length === 0) {
+      return;
+    }
+    const at = this.hits.findIndex((h: Hit) => h.id === this.hitId);
+    const next = at < 0 ? 0 : at + delta;
+    if (next < 0) {
+      return;
+    }
+    if (next >= this.hits.length) {
+      this.moreHits().then(() => {
+        if (next < this.hits.length) {
+          this.selectHit(this.hits[next].id);
+          this.hitScroller.scrollToIndex(next);
+        }
+      });
+      return;
+    }
+    this.selectHit(this.hits[next].id);
+    this.hitScroller.scrollToIndex(next);
+  }
+
   // ---- Message menu, selection, forwarding ----
 
   onTap(d: BubbleData): boolean {
@@ -684,17 +1109,22 @@ export struct ChatView {
     return true;
   }
 
+  private showMenu(m: MenuState): void {
+    m.seq = ++this.menuSeq;
+    this.input.stopEditing();
+    this.menus = [m];
+  }
+
   messageMenu(d: BubbleData): void {
     const m = d.msg;
-    if (m.kind === 'service') {
+    if (m.kind === 'service' || this.selected.length > 0) {
       return;
     }
-    this.acc.messages.properties(m).then((p: TdObject) => {
-      const items: string[] = [];
-      const actions: (() => void)[] = [];
-      const add = (label: string, fn: () => void): void => {
-        items.push(label);
-        actions.push(fn);
+    this.store.properties(m).then((p: TdObject) => {
+      const menu = new MenuState();
+      menu.title = `${m.outgoing ? '我' : d.senderName}  ${formatTime(m.date)}`.trim();
+      const add = (label: string, fn: () => void, danger: boolean = false): void => {
+        menu.items.push(new PanelItem(label, fn, danger));
       };
       if (this.canSend && p['can_be_replied']) {
         add('回复', () => { this.replyTo = m; });
@@ -715,19 +1145,19 @@ export struct ChatView {
         add('转发（不显示来源）', () => this.forward(d.ids(), true));
       }
       if (p['can_be_pinned']) {
-        const pinned = this.acc.messages.pinned && this.acc.messages.pinned.id === m.id;
+        const pinned = this.store.pinned !== null && this.store.pinned.id === m.id;
         add(pinned ? '取消置顶' : '置顶', () => {
-          this.acc.messages.pin(m, !pinned).catch((e: TdError) => promptAction.showToast({ message: e.message }));
+          this.store.pin(m, !pinned).catch((e: TdError) => this.toast(e.message));
         });
       }
       if (m.kind === 'voice' || m.kind === 'videoNote') {
         add('转换为文字', () => {
-          this.acc.messages.recognizeSpeech(m).catch((e: TdError) => promptAction.showToast({ message: e.message }));
+          this.store.recognizeSpeech(m).catch((e: TdError) => this.toast(e.message));
         });
       }
       if (p['can_get_link']) {
         add('复制链接', () => {
-          this.acc.messages.link(m).then((l: string) => copyText(l, '链接已复制')).catch(() => {});
+          this.store.link(m).then((l: string) => copyText(l, '链接已复制')).catch(() => {});
         });
       }
       add('选择', () => {
@@ -736,41 +1166,32 @@ export struct ChatView {
       });
       add('详细信息', () => this.showInfo(m));
       if (p['can_be_deleted_only_for_self'] || p['can_be_deleted_for_all_users']) {
-        add('删除', () => this.confirmDelete(d.ids(), p['can_be_deleted_for_all_users'] as boolean));
+        add('删除', () => this.confirmDelete(d.ids(), p['can_be_deleted_for_all_users'] as boolean), true);
       }
-      this.showReactionsThenMenu(m, items, actions);
+      menu.chosen = m.reactions.filter((r: ReactionItem) => r.chosen).map((r: ReactionItem) => r.emoji);
+      menu.onEmoji = (e: string): void => this.react(m, e);
+      if (this.chat && this.chat.type === 'secret') {
+        this.showMenu(menu);
+        return;
+      }
+      // Reactions the chat allows, most used first; the row scrolls sideways.
+      this.store.availableReactions(m).then((list: string[]) => {
+        menu.emojis = (list.length > 0 ? list : QUICK_REACTIONS).slice(0, 24);
+        this.showMenu(menu);
+      }).catch(() => this.showMenu(menu));
     }).catch(() => {});
   }
 
-  // Quick reactions first (like the official app), then the action list.
-  private showReactionsThenMenu(m: MsgItem, items: string[], actions: (() => void)[]): void {
-    const show = (): void => {
-      pickAction(items).then((index: number) => actions[index]()).catch(() => {});
-    };
-    if (this.chat && this.chat.type === 'secret') {
-      show();
-      return;
-    }
-    this.acc.messages.availableReactions(m).then((list: string[]) => {
-      const emojis = (list.length > 0 ? list : QUICK_REACTIONS).slice(0, 6);
-      items.unshift(`回应  ${emojis.join(' ')}`);
-      actions.unshift(() => {
-        pickAction(emojis, '回应').then((index: number) => this.react(m, emojis[index])).catch(() => {});
-      });
-      show();
-    }).catch(() => show());
-  }
-
   react(m: MsgItem, emoji: string): void {
-    this.acc.messages.react(m, emoji).catch((e: TdError) => promptAction.showToast({ message: e.message }));
+    this.store.react(m, emoji).catch((e: TdError) => this.toast(e.message));
   }
 
   translateMessage(m: MsgItem): void {
     const lang = Accounts.get().settings.translateTo;
-    this.acc.messages.translate(m, lang).then((t: string) => {
+    this.store.translate(m, lang).then((t: string) => {
       this.translations.set(m.id, t);
       this.rebuild(false);
-    }).catch((e: TdError) => promptAction.showToast({ message: `翻译失败：${e.message}` }));
+    }).catch((e: TdError) => this.toast(`翻译失败：${e.message}`));
   }
 
   private showInfo(m: MsgItem): void {
@@ -804,8 +1225,7 @@ export struct ChatView {
     promptAction.showDialog({ title: ids.length > 1 ? `删除 ${ids.length} 条消息？` : '删除消息？', buttons: buttons })
       .then((r: promptAction.ShowDialogSuccessResponse) => {
         if (r.index >= 1) {
-          this.acc.messages.remove(this.chatId, ids, r.index === 2)
-            .catch((e: TdError) => promptAction.showToast({ message: e.message }));
+          this.store.remove(this.chatId, ids, r.index === 2).catch((e: TdError) => this.toast(e.message));
           this.selected = [];
           this.rebuild(false);
         }
@@ -819,7 +1239,9 @@ export struct ChatView {
     req.asCopy = asCopy;
     AppState.forward = req;
     this.selected = [];
-    router.pushUrl({ url: 'pages/Forward' });
+    this.rebuild(false);
+    this.nav.push('forward');
+    this.nav.commit();
   }
 
   // ---- Chat header menu ----
@@ -829,71 +1251,63 @@ export struct ChatView {
     if (!c) {
       return;
     }
-    const items: string[] = ['搜索消息', this.acc.chats.isMuted(c) ? '取消静音' : '静音', '自动删除消息', '清空聊天记录'];
+    const menu = new MenuState();
+    const add = (label: string, fn: () => void, danger: boolean = false): void => {
+      menu.items.push(new PanelItem(label, fn, danger));
+    };
+    add('搜索消息', () => this.openSearch(''));
+    add(this.muted ? '取消静音' : '静音', () => {
+      this.acc.mute(c, this.muted ? 0 : MUTE_FOREVER).catch(() => {});
+    });
+    add('自动删除消息', () => this.autoDeleteMenu(c));
     if (c.type === 'private' && c.userId !== this.acc.myUserId) {
-      items.push('开始私密聊天');
+      add('开始私密聊天', () => {
+        this.acc.startSecretChat(c.userId).then((id: number) => {
+          this.nav.openChat(id);
+        }).catch((e: TdError) => this.toast(e.message));
+      });
     }
     if (c.type === 'secret') {
-      items.push('查看加密密钥');
+      add('查看加密密钥', () => {
+        const r = this.nav.push('secretKey');
+        r.secretChatId = c.secretChatId;
+        r.title = c.title;
+        this.nav.commit();
+      });
     }
-    pickAction(items).then((index: number) => {
-      const label = items[index];
-      if (label === '搜索消息') {
-        this.searchMode = true;
-      } else if (label === '静音' || label === '取消静音') {
-        this.acc.mute(c, label === '静音' ? 0x7FFFFFFF : 0).catch(() => {});
-      } else if (label === '自动删除消息') {
-        this.autoDeleteMenu(c);
-      } else if (label === '清空聊天记录') {
-        promptAction.showDialog({ title: '清空聊天记录？',
-          buttons: [{ text: '取消', color: '#888888' }, { text: '清空', color: '#E84026' }] })
-          .then((d: promptAction.ShowDialogSuccessResponse) => {
-            if (d.index === 1) {
-              this.acc.clearHistory(c, false).catch(() => {});
-            }
-          });
-      } else if (label === '开始私密聊天') {
-        this.acc.startSecretChat(c.userId).then((id: number) => {
-          this.onOpenChat(id);
-        }).catch((e: TdError) => promptAction.showToast({ message: e.message }));
-      } else if (label === '查看加密密钥') {
-        router.pushUrl({ url: 'pages/SecretKey', params: { secretChatId: c.secretChatId, title: c.title } });
-      }
-    }).catch(() => {});
+    add('清空聊天记录', () => {
+      promptAction.showDialog({ title: '清空聊天记录？',
+        buttons: [{ text: '取消', color: '#888888' }, { text: '清空', color: '#E84026' }] })
+        .then((d: promptAction.ShowDialogSuccessResponse) => {
+          if (d.index === 1) {
+            this.acc.clearHistory(c, false).catch((e: TdError) => this.toast(e.message));
+          }
+        });
+    }, true);
+    this.showMenu(menu);
   }
 
   private autoDeleteMenu(c: ChatItem): void {
-    pickAction(AUTO_DELETE_OPTIONS.map((x: number) => x === 0 ? '关闭' : formatTimer(x)), '自动删除消息')
-      .then((index: number) => {
-      this.acc.setAutoDelete(c, AUTO_DELETE_OPTIONS[index])
-        .catch((e: TdError) => promptAction.showToast({ message: e.message }));
-    }).catch(() => {});
+    const menu = new MenuState();
+    menu.title = '自动删除消息';
+    for (const secs of AUTO_DELETE_OPTIONS) {
+      menu.items.push(new PanelItem(`${secs === c.autoDeleteTime ? '✓ ' : ''}${secs === 0 ? '关闭' : formatTimer(secs)}`,
+        () => {
+          this.acc.setAutoDelete(c, secs).catch((e: TdError) => this.toast(e.message));
+        }));
+    }
+    this.showMenu(menu);
   }
 
-  runSearch(): void {
-    const q = this.searchQuery.trim();
-    if (!q) {
-      return;
+  private joinChat(): void {
+    if (this.chat) {
+      this.acc.join(this.chat).then(() => {
+        this.joinable = false;
+      }).catch((e: TdError) => this.toast(e.message));
     }
-    this.acc.messages.search(q, 'searchMessagesFilterEmpty', 0).then((list: MsgItem[]) => {
-      this.searchResults = list.map((m: MsgItem) => m.id);
-      this.searchIndex = 0;
-      if (this.searchResults.length === 0) {
-        promptAction.showToast({ message: '没有找到' });
-      } else {
-        this.jumpTo(this.searchResults[0]);
-      }
-    }).catch(() => {});
   }
 
-  searchStep(delta: number): void {
-    if (this.searchResults.length === 0) {
-      return;
-    }
-    this.searchIndex = Math.min(this.searchResults.length - 1, Math.max(0, this.searchIndex + delta));
-    this.jumpTo(this.searchResults[this.searchIndex]);
-  }
-  private actions(): BubbleActions {
+  private makeActions(): BubbleActions {
     return {
       onOpenMedia: (d: BubbleData) => this.openMedia(d),
       onOpenAlbumItem: (d: BubbleData, i: number) => this.openAlbumItem(d, i),
@@ -909,10 +1323,10 @@ export struct ChatView {
       onMenu: (d: BubbleData) => this.messageMenu(d),
       onTap: (d: BubbleData) => this.onTap(d),
       onLink: (u: string) => this.openUrl(u),
-      onMention: (n: string, id: number) => this.openMention(n, id),
+      onMention: (d: BubbleData, n: string, id: number) => this.openMention(n, id, d.msg.id),
       onSender: (d: BubbleData) => {
         if (!d.msg.senderIsChat) {
-          router.pushUrl({ url: 'pages/Profile', params: { userId: d.msg.senderId } });
+          this.openProfile(d.msg.senderId, 0);
         }
       }
     };
@@ -921,36 +1335,25 @@ export struct ChatView {
   @Builder
   Header() {
     if (this.selected.length > 0) {
-      Row({ space: 8 }) {
+      Row({ space: 4 }) {
         Button('✕', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => {
           this.selected = [];
           this.rebuild(false);
         })
-        Text(`已选择 ${this.selected.length} 条`).fontSize(17).layoutWeight(1)
+        Text(`已选择 ${this.selected.length} 条`).fontSize(17).layoutWeight(1).fontColor($r('app.color.text_primary'))
         Button('复制', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => {
-          const texts = this.bubbles.filter((b: BubbleData) => b.selected)
+          const texts = this.source.items().filter((b: BubbleData) => b.selected)
             .map((b: BubbleData) => summary(b.msg));
           copyText(texts.join('\n'));
           this.selected = [];
           this.rebuild(false);
         })
         Button('转发', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => this.forward(this.selected, false))
-        Button('删除', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontColor('#E84026')
+        Button('删除', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontColor($r('app.color.danger'))
           .onClick(() => this.confirmDelete(this.selected, true))
       }
-      .padding({ left: 4, right: 4, top: 4, bottom: 4 })
-      .width('100%')
-    } else if (this.searchMode) {
-      Row({ space: 4 }) {
-        Search({ value: this.searchQuery, placeholder: '搜索此聊天' })
-          .layoutWeight(1)
-          .onChange((v: string) => { this.searchQuery = v; })
-          .onSubmit(() => this.runSearch())
-        Button('▲', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => this.searchStep(1))
-        Button('▼', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => this.searchStep(-1))
-        Button('✕', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => { this.searchMode = false; })
-      }
-      .padding(4)
+      .padding({ left: 4, right: 4 })
+      .height(52)
       .width('100%')
     } else {
       Row({ space: 8 }) {
@@ -965,24 +1368,49 @@ export struct ChatView {
             }
             Text(this.title).fontSize(17).fontWeight(FontWeight.Medium).maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .fontColor(this.chat && this.chat.type === 'secret' ? '#2E9E45' : $r('sys.color.ohos_id_color_text_primary'))
+              .fontColor(this.chat && this.chat.type === 'secret' ? $r('app.color.secret') : $r('app.color.text_primary'))
           }
           if (this.subtitle) {
-            Text(this.subtitle).fontSize(12).maxLines(1)
-              .fontColor(this.subtitle.endsWith('…') || this.subtitle === '在线' ? '#3A8DDE' : '#888888')
+            Text(this.subtitle).fontSize(12).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+              .fontColor(this.subtitle.endsWith('…') || this.subtitle === '在线' ? $r('app.color.accent') :
+                $r('app.color.text_secondary'))
           }
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
         .onClick(() => {
           if (this.chat) {
-            router.pushUrl({ url: 'pages/Profile', params: { userId: this.chat.userId, chatId: this.chat.id } });
+            this.openProfile(this.chat.userId, this.chat.id);
           }
         })
         Button('⋮', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(22).onClick(() => this.chatMenu())
       }
-      .padding({ left: this.showBack ? 0 : 12, right: 4, top: 2, bottom: 2 })
+      .padding({ left: this.showBack ? 0 : 12, right: 4 })
+      .height(52)
       .width('100%')
+    }
+  }
+
+  // Voice note or music playing anywhere keeps its controls in reach.
+  @Builder
+  PlayerBar() {
+    if (this.playerOn) {
+      Row({ space: 6 }) {
+        Text(this.playerPlaying ? '❚❚' : '▶').fontSize(14).fontColor($r('app.color.accent')).width(36).height(36)
+          .textAlign(TextAlign.Center).onClick(() => this.audioPlayer.togglePause())
+        Text(this.playerTitle).fontSize(13).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1).fontColor($r('app.color.text_primary'))
+        Text(`${this.playerSpeed}x`).fontSize(12).fontWeight(FontWeight.Medium)
+          .fontColor(this.playerSpeed === 1 ? $r('app.color.text_secondary') : $r('app.color.accent'))
+          .padding({ left: 8, right: 8, top: 3, bottom: 3 }).borderRadius(10).backgroundColor($r('app.color.chip'))
+          .onClick(() => this.audioPlayer.cycleSpeed())
+        Text('✕').fontSize(14).fontColor($r('app.color.text_secondary')).width(36).height(36)
+          .textAlign(TextAlign.Center).onClick(() => this.audioPlayer.stop())
+      }
+      .padding({ left: 6, right: 4 })
+      .width('100%')
+      .backgroundColor($r('app.color.page_bg'))
+      .border({ width: { top: 0.5 }, color: $r('app.color.separator') })
     }
   }
 
@@ -991,9 +1419,10 @@ export struct ChatView {
     if (this.replyTo || this.editing) {
       Row({ space: 8 }) {
         Column() {
-          Text(this.editing ? '编辑消息' : `回复 ${this.previewOf(this.replyTo!).name}`).fontSize(12).fontColor('#3A8DDE')
+          Text(this.editing ? '编辑消息' : `回复 ${this.previewOf(this.replyTo!).name}`).fontSize(12)
+            .fontColor($r('app.color.accent'))
           Text(this.editing ? summary(this.editing) : this.previewOf(this.replyTo!).text).fontSize(13).maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.text_primary'))
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
@@ -1007,15 +1436,16 @@ export struct ChatView {
       }
       .padding({ left: 12, right: 4 })
       .width('100%')
-      .border({ width: { left: 3 }, color: { left: '#3A8DDE' } })
+      .border({ width: { left: 3 }, color: { left: $r('app.color.accent') } })
     }
   }
 
   @Builder
   AttachMenu() {
     if (this.showAttach) {
-      Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceAround }) {
+      Flex({ wrap: FlexWrap.Wrap }) {
         this.AttachItem('🖼', '图片/视频', () => this.pickMedia())
+        this.AttachItem('📷', '拍摄', () => this.takePhoto())
         this.AttachItem('📎', '文件', () => this.pickDocument())
         this.AttachItem('📍', '位置', () => this.sendLocation())
         if (this.chat && this.chat.type !== 'secret' && this.chat.type !== 'private') {
@@ -1030,7 +1460,7 @@ export struct ChatView {
       }
       .padding(10)
       .width('100%')
-      .backgroundColor($r('sys.color.ohos_id_color_sub_background'))
+      .backgroundColor($r('app.color.page_alt'))
     }
   }
 
@@ -1038,38 +1468,51 @@ export struct ChatView {
   AttachItem(icon: string, label: string, fn: () => void) {
     Column({ space: 4 }) {
       Text(icon).fontSize(26).width(52).height(52).textAlign(TextAlign.Center).borderRadius(26)
-        .backgroundColor($r('sys.color.ohos_id_color_background'))
-      Text(label).fontSize(12)
+        .backgroundColor($r('app.color.card'))
+      Text(label).fontSize(12).fontColor($r('app.color.text_primary'))
     }
-    .width('25%')
+    // One row on the unfolded screen, two or three on the cover screen.
+    .width(`${100 / columnsFor(this.paneW - 20, 84, 4, 9)}%`)
     .padding(6)
     .onClick(fn)
   }
 
   @Builder
+  BottomAction(p: BottomP) {
+    Row() {
+      Button(p.label, { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => p.fn())
+    }
+    .justifyContent(FlexAlign.Center)
+    .width('100%')
+    .height(52)
+  }
+
+  @Builder
   Composer() {
-    if (!this.canSend) {
-      Row() {
-        if (this.chat && this.chat.type === 'channel') {
-          Button(this.chat && this.acc.chats.isMuted(this.chat) ? '取消静音' : '静音', { buttonStyle: ButtonStyleMode.TEXTUAL })
-            .onClick(() => {
-              if (this.chat) {
-                this.acc.mute(this.chat, this.acc.chats.isMuted(this.chat) ? 0 : 0x7FFFFFFF).catch(() => {});
-              }
-            })
-        } else {
-          Text(this.secretBanner || '你不能在此聊天中发送消息').fontSize(14).fontColor('#888888')
+    if (this.joinable) {
+      this.BottomAction({ label: this.chat && this.chat.type === 'channel' ? '关注频道' : '加入群组', fn: () => this.joinChat() })
+    } else if (!this.canSend) {
+      if (this.chat && this.chat.type === 'channel') {
+        this.BottomAction({ label: this.muted ? '取消静音' : '静音', fn: () => {
+          if (this.chat) {
+            this.acc.mute(this.chat, this.muted ? 0 : MUTE_FOREVER).catch(() => {});
+          }
+        } })
+      } else {
+        Row() {
+          Text(this.secretBanner || '你不能在此聊天中发送消息').fontSize(14).fontColor($r('app.color.text_secondary'))
         }
+        .justifyContent(FlexAlign.Center)
+        .width('100%')
+        .height(52)
       }
-      .justifyContent(FlexAlign.Center)
-      .width('100%')
-      .height(52)
     } else if (this.recording) {
       Row({ space: 10 }) {
         Column().width(10).height(10).borderRadius(5).backgroundColor(Color.Red)
         Text(`${Math.floor(this.recordSecs / 60)}:${(this.recordSecs % 60 < 10 ? '0' : '')}${this.recordSecs % 60}`)
-          .fontSize(16)
-        Text('‹ 上滑取消').fontSize(14).fontColor('#888888').layoutWeight(1).textAlign(TextAlign.Center)
+          .fontSize(16).fontColor($r('app.color.text_primary'))
+        Text('‹ 上滑取消').fontSize(14).fontColor($r('app.color.text_secondary')).layoutWeight(1)
+          .textAlign(TextAlign.Center)
         this.MicButton()
       }
       .padding({ left: 16, right: 6, top: 6, bottom: 6 })
@@ -1080,23 +1523,47 @@ export struct ChatView {
           .onClick(() => {
             this.showPanel = !this.showPanel;
             this.showAttach = false;
+            if (this.showPanel) {
+              this.input.stopEditing();
+            }
           })
-        TextArea({ placeholder: this.chat && this.chat.type === 'secret' ? '私密消息' : '消息', text: this.draft })
+        TextArea({ placeholder: this.chat && this.chat.type === 'secret' ? '私密消息' : '消息', text: this.draft,
+          controller: this.input })
           .layoutWeight(1)
-          .constraintSize({ maxHeight: 140 })
+          .constraintSize({ maxHeight: Math.min(140, Math.max(60, this.paneH * 0.3)) })
           .onChange((v: string) => this.onDraftChange(v))
-          .onFocus(() => { this.showPanel = false; })
+          .onFocus(() => { this.closePanels(); })
+          // A hardware keyboard sends with Enter; Shift+Enter starts a new line.
+          .onKeyPreIme((e: KeyEvent): boolean => {
+            if (e.keyCode !== KEY_ENTER || e.keySource !== KeySource.Keyboard) {
+              return false;
+            }
+            if (e.getModifierKeyState && e.getModifierKeyState(['Shift'])) {
+              return false;
+            }
+            if (e.type === KeyType.Down) {
+              this.sendText();
+            }
+            return true;
+          })
         if (this.draft.trim().length > 0) {
           Button(this.editing ? '✓' : '➤', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(22)
             .onClick(() => this.sendText())
             .gesture(LongPressGesture().onAction(() => {
-              pickAction(['静默发送（无通知）']).then(() => this.sendText(true)).catch(() => {});
+              if (!this.editing) {
+                const menu = new MenuState();
+                menu.items.push(new PanelItem('静默发送（对方不会收到提示音）', () => this.sendText(true)));
+                this.showMenu(menu);
+              }
             }))
         } else {
           Button('📎', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(20)
             .onClick(() => {
               this.showAttach = !this.showAttach;
               this.showPanel = false;
+              if (this.showAttach) {
+                this.input.stopEditing();
+              }
             })
           this.MicButton()
         }
@@ -1114,7 +1581,7 @@ export struct ChatView {
       .height(44)
       .textAlign(TextAlign.Center)
       .borderRadius(22)
-      .backgroundColor(this.recording ? '#3A8DDE' : Color.Transparent)
+      .backgroundColor(this.recording ? $r('app.color.accent') : Color.Transparent)
       .onTouch((e: TouchEvent) => {
         if (e.type === TouchType.Down) {
           this.startRecording();
@@ -1128,92 +1595,221 @@ export struct ChatView {
       })
   }
 
-  build() {
+  // Matches of a search or a tapped #hashtag. The panel is part of the
+  // layout rather than an overlay, so the message it jumps to stays visible.
+  @Builder
+  SearchPanel() {
     Column() {
-      this.Header()
-      if (this.secretBanner) {
-        Text(this.secretBanner).fontSize(13).fontColor('#2E9E45').padding(6).width('100%')
-          .textAlign(TextAlign.Center).backgroundColor('#E8F5E9')
-      }
-      if (this.pinnedText) {
-        Row({ space: 8 }) {
-          Column().width(3).height(30).backgroundColor('#3A8DDE')
-          Column() {
-            Text('置顶消息').fontSize(12).fontColor('#3A8DDE')
-            Text(this.pinnedText).fontSize(13).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          }
-          .alignItems(HorizontalAlign.Start)
+      Row({ space: 2 }) {
+        Search({ value: this.searchQuery, placeholder: '搜索此聊天，或输入 #标签' })
           .layoutWeight(1)
-        }
-        .padding({ left: 12, right: 12, top: 4, bottom: 4 })
-        .width('100%')
-        .backgroundColor($r('sys.color.ohos_id_color_background'))
-        .onClick(() => {
-          if (this.acc.messages.pinned) {
-            this.jumpTo(this.acc.messages.pinned.id);
-          }
-        })
+          .height(38)
+          .onChange((v: string) => { this.searchQuery = v; })
+          .onSubmit(() => this.runSearch(true))
+        Button('▲', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(13).onClick(() => this.stepHit(1))
+        Button('▼', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(13).onClick(() => this.stepHit(-1))
+        Button('✕', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => { this.searchOpen = false; })
       }
-      Stack({ alignContent: Alignment.BottomEnd }) {
-        List({ scroller: this.scroller }) {
-          ForEach(this.bubbles, (b: BubbleData) => {
-            ListItem() {
-              Column() {
-                if (b.dayLabel) {
-                  Text(b.dayLabel).fontSize(12).fontColor(Color.White)
-                    .padding({ left: 10, right: 10, top: 3, bottom: 3 }).borderRadius(10)
-                    .backgroundColor('#55556677').margin({ top: 8, bottom: 4 })
-                }
-                MessageBubble({ data: b, actions: this.actions() })
+      .padding({ left: 8, right: 2, top: 6, bottom: 2 })
+      .width('100%')
+
+      Text(this.searchBusy && this.hits.length === 0 ? '正在搜索…' :
+        (this.searchedFor ? (this.hits.length === 0 ? `没有找到“${this.searchedFor}”` :
+          `“${this.searchedFor}” · ${this.searchTotal} 条，点击跳转`) : '输入关键词后按回车搜索'))
+        .fontSize(12).fontColor($r('app.color.text_secondary')).maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis }).padding({ left: 14, right: 14, top: 2, bottom: 4 })
+        .width('100%')
+
+      List({ scroller: this.hitScroller }) {
+        ForEach(this.hits, (h: Hit) => {
+          ListItem() {
+            Column({ space: 2 }) {
+              Row({ space: 6 }) {
+                Text(h.name).fontSize(13).fontWeight(FontWeight.Medium).fontColor($r('app.color.accent')).maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+                Text(formatTime(h.date)).fontSize(12).fontColor($r('app.color.text_secondary'))
               }
-              .width('100%')
+              Text(h.text).fontSize(14).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+                .fontColor($r('app.color.text_primary')).width('100%')
             }
-          }, (b: BubbleData) => b.key)
+            .alignItems(HorizontalAlign.Start)
+            .padding({ left: 14, right: 14, top: 7, bottom: 7 })
+            .width('100%')
+            .backgroundColor(h.id === this.hitId ? $r('app.color.accent_soft') : Color.Transparent)
+            .onClick(() => this.selectHit(h.id))
+          }
+        }, (h: Hit) => `${h.id}|${h.id === this.hitId}`)
+      }
+      .layoutWeight(1)
+      .width('100%')
+      .divider({ strokeWidth: 0.5, color: $r('app.color.separator'), startMargin: 14 })
+      .onReachEnd(() => {
+        this.moreHits();
+      })
+    }
+    .width('100%')
+    .height(panelHeight(this.paneH))
+    .backgroundColor($r('app.color.page_bg'))
+    .border({ width: { top: 0.5 }, color: $r('app.color.separator') })
+  }
+
+  @Builder
+  Messages() {
+    Stack({ alignContent: Alignment.BottomEnd }) {
+      List({ scroller: this.scroller }) {
+        LazyForEach(this.source, (b: BubbleData) => {
+          ListItem() {
+            Column() {
+              if (b.dayLabel) {
+                Text(b.dayLabel).fontSize(12).fontColor(Color.White)
+                  .padding({ left: 10, right: 10, top: 3, bottom: 3 }).borderRadius(10)
+                  .backgroundColor($r('app.color.service_bg')).margin({ top: 8, bottom: 4 })
+              }
+              if (b.unreadDivider) {
+                Text('未读消息').fontSize(12).fontColor($r('app.color.accent')).textAlign(TextAlign.Center)
+                  .width('100%').padding({ top: 4, bottom: 4 }).margin({ top: 4, bottom: 4 })
+                  .backgroundColor($r('app.color.accent_soft'))
+              }
+              MessageBubble({
+                data: b, actions: this.bubbleActions,
+                bubbleMax: bubbleMaxWidth(this.paneW), mediaW: mediaWidth(this.paneW),
+                mediaH: mediaMaxHeight(this.paneH), stickerSide: stickerSide(this.paneW)
+              })
+            }
+            .width('100%')
+          }
+        }, (b: BubbleData) => b.key)
+      }
+      .width('100%')
+      .height('100%')
+      .cachedCount(4)
+      .scrollBar(BarState.Off)
+      // Older messages inserted above must not move what is being read.
+      .maintainVisibleContentPosition(true)
+      .onReachStart(() => this.store.loadOlder())
+      .onReachEnd(() => {
+        this.atBottom = this.store.atLatest;
+        this.store.loadNewer();
+      })
+      .onScrollIndex((start: number, end: number) => {
+        this.visStart = start;
+        this.visEnd = end;
+        this.atBottom = end >= this.source.totalCount() - 1 && this.store.atLatest;
+        this.showScrollDown = !this.atBottom;
+        this.scheduleView();
+      })
+
+      if (this.count === 0) {
+        Column() {
+          Text('暂无消息').fontSize(13).fontColor(Color.White).padding({ left: 12, right: 12, top: 5, bottom: 5 })
+            .borderRadius(12).backgroundColor($r('app.color.service_bg'))
         }
         .width('100%')
         .height('100%')
-        .backgroundColor('#DCE5EC')
-        .onReachStart(() => this.acc.messages.loadOlder())
-        .onReachEnd(() => {
-          this.atBottom = true;
-          this.acc.messages.loadNewer();
-        })
-        .onScrollIndex((start: number, end: number) => {
-          this.atBottom = end >= this.bubbles.length - 1 && this.acc.messages.atLatest;
-          this.showScrollDown = !this.atBottom;
-        })
-        if (this.showScrollDown) {
-          Text('⌄').fontSize(26).width(44).height(44).textAlign(TextAlign.Center).borderRadius(22)
-            .backgroundColor(Color.White).shadow({ radius: 6, color: '#33000000' })
-            .margin({ right: 14, bottom: 14 })
-            .onClick(() => this.scrollToBottom())
+        .justifyContent(FlexAlign.Center)
+        .hitTestBehavior(HitTestMode.None)
+      } else if (this.count < 0) {
+        Column() {
+          LoadingProgress().width(36).height(36).color($r('app.color.accent'))
         }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .hitTestBehavior(HitTestMode.None)
       }
-      .layoutWeight(1)
 
+      if (this.showScrollDown) {
+        Stack({ alignContent: Alignment.Top }) {
+          Text('⌄').fontSize(26).width(44).height(44).textAlign(TextAlign.Center).borderRadius(22)
+            .fontColor($r('app.color.text_primary')).backgroundColor($r('app.color.card'))
+            .shadow({ radius: 6, color: '#33000000' }).margin({ top: 8 })
+          if (this.unread > 0) {
+            Text(this.unread > 999 ? '999+' : String(this.unread)).fontSize(11).fontColor(Color.White)
+              .padding({ left: 6, right: 6 }).height(18).borderRadius(9).backgroundColor($r('app.color.accent'))
+          }
+        }
+        .margin({ right: 14, bottom: 14 })
+        .onClick(() => this.scrollToBottom())
+      }
+    }
+    .layoutWeight(1)
+    .width('100%')
+    .backgroundColor($r('app.color.chat_bg'))
+  }
+
+  build() {
+    Stack() {
       Column() {
-        this.ComposerBanner()
-        this.Composer()
-        this.AttachMenu()
-        if (this.showPanel) {
-          StickerPanel({
-            account: this.acc,
-            onEmoji: (e: string) => { this.draft += e; },
-            onSticker: (fileId: number) => {
-              this.showPanel = false;
-              this.after(this.acc.messages.sendSticker(fileId, this.opts()));
-            },
-            onGif: (fileId: number) => {
-              this.showPanel = false;
-              this.after(this.acc.messages.sendAnimation(fileId, this.opts()));
+        this.Header()
+        this.PlayerBar()
+        if (this.secretBanner) {
+          Text(this.secretBanner).fontSize(13).fontColor($r('app.color.secret')).padding(6).width('100%')
+            .textAlign(TextAlign.Center).backgroundColor($r('app.color.inset'))
+        }
+        if (this.pinnedText) {
+          Row({ space: 8 }) {
+            Column().width(3).height(30).backgroundColor($r('app.color.accent'))
+            Column() {
+              Text('置顶消息').fontSize(12).fontColor($r('app.color.accent'))
+              Text(this.pinnedText).fontSize(13).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                .fontColor($r('app.color.text_primary'))
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
+          }
+          .padding({ left: 12, right: 12, top: 4, bottom: 4 })
+          .width('100%')
+          .onClick(() => {
+            if (this.store.pinned) {
+              this.jumpTo(this.store.pinned.id);
             }
           })
         }
+        this.Messages()
+        if (this.searchOpen) {
+          this.SearchPanel()
+        } else {
+          Column() {
+            this.ComposerBanner()
+            this.Composer()
+            this.AttachMenu()
+            if (this.showPanel) {
+              StickerPanel({
+                account: this.acc,
+                paneW: this.paneW,
+                panelH: panelHeight(this.paneH),
+                onEmoji: (e: string) => { this.draft += e; },
+                onSticker: (fileId: number) => {
+                  this.showPanel = false;
+                  this.after(this.store.sendSticker(fileId, this.opts()));
+                },
+                onGif: (fileId: number) => {
+                  this.showPanel = false;
+                  this.after(this.store.sendAnimation(fileId, this.opts()));
+                }
+              })
+            }
+          }
+          .width('100%')
+        }
       }
-      .backgroundColor($r('sys.color.ohos_id_color_background'))
+      .width('100%')
+      .height('100%')
+
+      ForEach(this.menus, (m: MenuState) => {
+        ActionPanel({
+          title: m.title, emojis: m.emojis, chosen: m.chosen, items: m.items, maxH: this.paneH,
+          onEmoji: m.onEmoji,
+          onClose: (): void => { this.menus = []; }
+        })
+      }, (m: MenuState) => `${m.seq}`)
     }
     .width('100%')
     .height('100%')
-    .backgroundColor($r('sys.color.ohos_id_color_background'))
+    .backgroundColor($r('app.color.page_bg'))
+    .onAreaChange((_: Area, area: Area) => {
+      this.paneW = Number(area.width);
+      this.paneH = Number(area.height);
+    })
   }
 }

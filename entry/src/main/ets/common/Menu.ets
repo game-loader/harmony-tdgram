@@ -17,7 +17,7 @@ function tuple(b: B[]): MenuButtons {
 }
 
 function button(text: string): B {
-  const b: B = { text: text, color: '#000000' };
+  const b: B = { text: text, color: '#3A8DDE' };
   return b;
 }
 

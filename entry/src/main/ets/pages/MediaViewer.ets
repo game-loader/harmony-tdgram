@@ -188,12 +188,15 @@ struct MediaViewer {
   }
 
   build() {
-    Stack() {
+    // Half-folded on a table, the picture moves to the upper half of the
+    // screen and the controls to the lower one.
+    FolderStack({ upperItems: ['viewerMedia'] }) {
       Swiper() {
         ForEach(this.items, (it: ViewerItem) => {
           this.Page(it)
         }, (it: ViewerItem) => `${it.fileId}|${it.path}|${it.streamUrl}`)
       }
+      .id('viewerMedia')
       .index(this.index)
       .loop(false)
       .indicator(false)

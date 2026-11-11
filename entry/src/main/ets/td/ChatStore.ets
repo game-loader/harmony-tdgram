@@ -103,13 +103,23 @@ export class ChatStore {
     item.isPinned = t['is_pinned'] as boolean;
     item.unread = (t['unread_count'] as number) ?? 0;
     item.unreadMentions = (t['unread_mention_count'] as number) ?? 0;
+    item.lastReadInboxId = (t['last_read_inbox_message_id'] as number) ?? 0;
     item.order = String(t['order'] ?? '0');
     const last = t['last_message'] as TdObject | undefined;
     if (last) {
-      const m = fillMessage(new MsgItem(), last, (id: number, isChat: boolean) => this.nameOf(id, isChat));
+      const m = new MsgItem();
+      try {
+        fillMessage(m, last, (id: number, isChat: boolean) => this.nameOf(id, isChat));
+      } catch (e) {
+        m.kind = 'unsupported';
+        m.text = '消息';
+        m.date = (last['date'] as number) ?? 0;
+        m.id = (last['id'] as number) ?? 0;
+      }
       const who = m.outgoing ? '我' : this.nameOf(m.senderId, m.senderIsChat).split(' ')[0];
       item.lastText = who && m.kind !== 'service' ? `${who}: ${summary(m)}` : summary(m);
       item.lastDate = m.date;
+      item.lastMsgId = m.id;
     }
     return item;
   }
@@ -169,7 +179,15 @@ export class ChatStore {
       c.lastMsgId = 0;
       return;
     }
-    const m = fillMessage(new MsgItem(), msg, (id: number, isChat: boolean) => this.nameOf(id, isChat));
+    const m = new MsgItem();
+    try {
+      fillMessage(m, msg, (id: number, isChat: boolean) => this.nameOf(id, isChat));
+    } catch (e) {
+      m.id = (msg['id'] as number) ?? 0;
+      m.date = (msg['date'] as number) ?? 0;
+      m.kind = 'unsupported';
+      m.text = '消息';
+    }
     let text = summary(m);
     if (c.type === 'group' || c.type === 'supergroup') {
       const who = m.outgoing ? '我' : this.nameOf(m.senderId, m.senderIsChat).split(' ')[0];
@@ -215,6 +233,7 @@ export class ChatStore {
     c.unreadMentions = raw['unread_mention_count'] as number;
     c.markedUnread = raw['is_marked_as_unread'] as boolean;
     c.lastReadOutboxId = raw['last_read_outbox_message_id'] as number;
+    c.lastReadInboxId = (raw['last_read_inbox_message_id'] as number) ?? 0;
     c.autoDeleteTime = raw['message_auto_delete_time'] as number;
     const perms = raw['permissions'] as TdObject | undefined;
     c.canSend = c.type !== 'channel' && (!perms || (perms['can_send_basic_messages'] as boolean) !== false);
@@ -320,11 +339,13 @@ export class ChatStore {
         });
         break;
       case 'updateChatReadInbox':
-        this.patch(u, (c: ChatItem) => { c.unread = u['unread_count'] as number; });
+        this.patch(u, (c: ChatItem) => {
+          c.unread = u['unread_count'] as number;
+          c.lastReadInboxId = u['last_read_inbox_message_id'] as number;
+        });
         break;
       case 'updateChatReadOutbox':
         this.patch(u, (c: ChatItem) => { c.lastReadOutboxId = u['last_read_outbox_message_id'] as number; });
-        this.core.emit('messages');
         break;
       case 'updateChatUnreadMentionCount':
       case 'updateMessageMentionRead':
@@ -400,7 +421,11 @@ export class ChatStore {
         const raw = u['message'] as TdObject;
         const c = this.chats.get(raw['chat_id'] as number);
         if (c && !(raw['is_outgoing'] as boolean)) {
-          this.onIncoming(c, fillMessage(new MsgItem(), raw, (id: number, isChat: boolean) => this.nameOf(id, isChat)));
+          try {
+            this.onIncoming(c, fillMessage(new MsgItem(), raw, (id: number, isChat: boolean) => this.nameOf(id, isChat)));
+          } catch (e) {
+            // No notification for a message that cannot be parsed.
+          }
         }
         break;
       }
@@ -415,8 +440,7 @@ function draftText(d: TdObject): string {
   if (content && content['@type'] === 'draftMessageContentText') {
     return ((content['text'] as TdObject)['text'] as string) ?? '';
   }
-  const legacy = d['input_message_text'] as TdObject | undefined;
-  return legacy ? ((legacy['text'] as TdObject)['text'] as string) ?? '' : '';
+  return '';
 }
 
 function actionText(a: TdObject): string {

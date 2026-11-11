@@ -1,4 +1,3 @@
 {
-  "src": ["pages/Login", "pages/Main", "pages/Chat", "pages/MediaViewer", "pages/Forward", "pages/Profile",
-    "pages/Settings", "pages/Contacts", "pages/CreatePoll", "pages/SecretKey"]
+  "src": ["pages/Login", "pages/Main", "pages/MediaViewer"]
 }

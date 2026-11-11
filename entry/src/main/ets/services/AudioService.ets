@@ -120,6 +120,23 @@ export class AudioService {
     });
   }
 
+  // True while a voice note or music track is loaded (playing or paused).
+  hasTrack(): boolean {
+    return this.player !== null;
+  }
+
+  // Pauses or resumes the current track.
+  togglePause(): void {
+    if (!this.player) {
+      return;
+    }
+    if (this.playing) {
+      this.player.pause();
+    } else {
+      this.player.play();
+    }
+  }
+
   seek(fraction: number): void {
     if (this.player && this.duration > 0) {
       this.player.seek(Math.floor(this.duration * fraction));

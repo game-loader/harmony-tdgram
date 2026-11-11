@@ -4,9 +4,20 @@ import { API_HASH, API_ID } from '../common/Config';
 import { AccountCore, AccountEvent, AccountListener } from './Core';
 import { ChatStore } from './ChatStore';
 import { FileStore } from './FileStore';
-import { MessageStore } from './MessageStore';
+import { MessageStore, OpenOptions } from './MessageStore';
 import { o, TdClient, TdObject } from './TdClient';
 import { ChatItem, MsgItem, UserItem } from './Models';
+import { ProxyConfig } from './Proxy';
+
+export type ConnectionState = 'waiting' | 'proxy' | 'connecting' | 'updating' | 'ready';
+// Where a t.me / tg: link leads.
+export class LinkTarget {
+  chatId: number = 0;
+  messageId: number = 0;
+  invite: string = '';       // invite link that still has to be joined
+  inviteTitle: string = '';
+  proxy: ProxyConfig | null = null;
+}
 
 export type AuthStep = 'loading' | 'phone' | 'code' | 'password' | 'qr' | 'email' | 'ready' | 'closed';
 
@@ -20,9 +31,15 @@ export class Account implements AccountCore {
   authStep: AuthStep = 'loading';
   authHint: string = '';
   qrLink: string = '';
+  readReceipts: boolean = true;
+  connection: ConnectionState = 'connecting';
   files: FileStore;
   chats: ChatStore;
-  messages: MessageStore;
+  // Chat-independent message actions (forwarding, parsing search results).
+  actions: MessageStore;
+  // One store per chat view currently on screen.
+  private sessions: MessageStore[] = [];
+  private nameOf: (id: number, isChat: boolean) => string;
   private listeners: AccountListener[] = [];
   private batchTimer: number = -1;
   private pendingEvents: Set<AccountEvent> = new Set();
@@ -34,8 +51,8 @@ export class Account implements AccountCore {
     this.td = new TdClient();
     this.files = new FileStore(this);
     this.chats = new ChatStore(this);
-    const nameOf = (id: number, isChat: boolean): string => this.chats.nameOf(id, isChat);
-    this.messages = new MessageStore(this, nameOf);
+    this.nameOf = (id: number, isChat: boolean): string => this.chats.nameOf(id, isChat);
+    this.actions = new MessageStore(this, this.nameOf);
     this.td.addListener((u: TdObject) => this.onUpdate(u));
     this.td.start();
   }
@@ -67,6 +84,31 @@ export class Account implements AccountCore {
     }, 16);
   }
 
+  // A store targeting a chat for sends and searches; no history is loaded.
+  store(chatId: number, topicId: number = 0): MessageStore {
+    const c = this.chats.chats.get(chatId);
+    return new MessageStore(this, this.nameOf).bind(chatId, topicId, c !== undefined && c.type === 'secret');
+  }
+
+  // Opens a chat (or one forum topic) for a view. Pair with closeSession.
+  openSession(chatId: number, topicId: number, opt: OpenOptions): MessageStore {
+    const c = this.chats.chats.get(chatId);
+    opt.secret = c !== undefined && c.type === 'secret';
+    const s = new MessageStore(this, this.nameOf).bind(chatId, topicId, opt.secret);
+    this.sessions.push(s);
+    s.start(opt);
+    return s;
+  }
+
+  closeSession(s: MessageStore): void {
+    this.sessions = this.sessions.filter((x: MessageStore) => x !== s);
+    s.stop();
+  }
+
+  isViewing(chatId: number): boolean {
+    return this.sessions.some((s: MessageStore) => s.chatId === chatId);
+  }
+
   me(): UserItem | undefined {
     return this.chats.users.get(this.myUserId);
   }
@@ -85,9 +127,20 @@ export class Account implements AccountCore {
       this.onAuthState(u['authorization_state'] as TdObject);
       return;
     }
+    if (type === 'updateConnectionState') {
+      this.connection = connectionOf((u['state'] as TdObject)['@type'] as string);
+      this.emit('connection');
+      return;
+    }
     this.files.onUpdate(u);
     this.chats.onUpdate(u);
-    this.messages.onUpdate(u);
+    for (const s of this.sessions) {
+      s.onUpdate(u);
+      // Read ticks of outgoing messages follow the chat's read position.
+      if (type === 'updateChatReadOutbox' && s.chatId === (u['chat_id'] as number)) {
+        s.touch();
+      }
+    }
     if (type === 'updateUser' && (((u['user'] as TdObject)['id'] as number) === this.myUserId)) {
       this.emit('me');
     }
@@ -162,7 +215,7 @@ export class Account implements AccountCore {
       'system_language_code': 'zh',
       'device_model': deviceInfo.marketName || deviceInfo.productModel || 'HarmonyOS',
       'system_version': deviceInfo.displayVersion || 'HarmonyOS',
-      'application_version': '1.0.0'
+      'application_version': '0.3.0'
     })).catch((e: Error) => {
       this.authHint = `初始化失败：${e.message}`;
       this.emit('auth');
@@ -280,34 +333,80 @@ export class Account implements AccountCore {
     return this.td.send(o({ '@type': 'searchMessages', 'chat_list': o({ '@type': 'chatListMain' }), 'query': query,
       'offset': '', 'limit': 50, 'filter': o({ '@type': 'searchMessagesFilterEmpty' }), 'min_date': 0, 'max_date': 0 }))
       .then((r: TdObject) => ((r['messages'] as TdObject[]) ?? []).map((raw: TdObject) =>
-        this.messages.fetchParsed(raw)));
+        this.actions.fetchParsed(raw)));
   }
 
-  openLink(url: string): Promise<number> {
+  openLink(url: string): Promise<LinkTarget> {
+    const target = new LinkTarget();
     return this.td.send(o({ '@type': 'getInternalLinkType', 'link': url })).then((t: TdObject) => {
-      if (t['@type'] === 'internalLinkTypePublicChat') {
-        return this.td.send(o({ '@type': 'searchPublicChat', 'username': t['chat_username'] as string }))
-          .then((c: TdObject) => c['id'] as number);
+      switch (t['@type'] as string) {
+        case 'internalLinkTypePublicChat':
+          return this.td.send(o({ '@type': 'searchPublicChat', 'username': t['chat_username'] as string }))
+            .then((c: TdObject) => {
+              target.chatId = c['id'] as number;
+              return target;
+            });
+        case 'internalLinkTypeChatInvite': {
+          const link = t['invite_link'] as string;
+          return this.td.send(o({ '@type': 'checkChatInviteLink', 'invite_link': link })).then((info: TdObject) => {
+            // chat_id is set when the chat can already be opened (a member, or a public chat).
+            target.chatId = (info['chat_id'] as number) ?? 0;
+            if (!target.chatId) {
+              target.invite = link;
+              target.inviteTitle = (info['title'] as string) ?? '';
+            }
+            return target;
+          });
+        }
+        case 'internalLinkTypeMessage':
+          return this.td.send(o({ '@type': 'getMessageLinkInfo', 'url': url })).then((info: TdObject) => {
+            target.chatId = (info['chat_id'] as number) ?? 0;
+            const m = info['message'] as TdObject | undefined;
+            target.messageId = m ? m['id'] as number : 0;
+            return target;
+          });
+        case 'internalLinkTypeProxy': {
+          const p = t['proxy'] as TdObject | undefined;
+          target.proxy = p ? ProxyConfig.fromTd(p) : null;
+          return target;
+        }
+        default:
+          return target;
       }
-      if (t['@type'] === 'internalLinkTypeChatInvite') {
-        return this.td.send(o({ '@type': 'joinChatByInviteLink', 'invite_link': t['invite_link'] as string }))
-          .then(() => this.td.send(o({ '@type': 'checkChatInviteLink', 'invite_link': t['invite_link'] as string })))
-          .then((info: TdObject) => info['chat_id'] as number);
-      }
-      if (t['@type'] === 'internalLinkTypeMessage') {
-        return this.td.send(o({ '@type': 'getMessageLinkInfo', 'url': url }))
-          .then((info: TdObject) => info['chat_id'] as number);
-      }
-      return 0;
     });
+  }
+
+  // Resolves the joined chat's id, or 0 when a join request was sent instead.
+  joinByLink(link: string): Promise<number> {
+    return this.td.send(o({ '@type': 'joinChatByInviteLink', 'invite_link': link })).then((r: TdObject) =>
+      r['@type'] === 'chatJoinResultSuccess' ? r['chat_id'] as number : 0);
   }
 
   join(chat: ChatItem): Promise<TdObject> {
     return this.td.send(o({ '@type': 'joinChat', 'chat_id': chat.id }));
   }
 
+  // True when the account has left (or never joined) this supergroup or channel.
+  notMember(chat: ChatItem): Promise<boolean> {
+    if (chat.type !== 'supergroup' && chat.type !== 'channel') {
+      return Promise.resolve(false);
+    }
+    return this.td.send(o({ '@type': 'getSupergroup', 'supergroup_id': chat.groupId })).then((sg: TdObject) =>
+      ((sg['status'] as TdObject)['@type'] as string) === 'chatMemberStatusLeft');
+  }
+
   send(req: TdObject): Promise<TdObject> {
     return this.td.send(req);
+  }
+}
+
+function connectionOf(type: string): ConnectionState {
+  switch (type) {
+    case 'connectionStateWaitingForNetwork': return 'waiting';
+    case 'connectionStateConnectingToProxy': return 'proxy';
+    case 'connectionStateConnecting': return 'connecting';
+    case 'connectionStateUpdating': return 'updating';
+    default: return 'ready';
   }
 }
 

@@ -17,10 +17,11 @@ export class AlbumItem {
   }
 }
 
-// Everything a bubble renders, resolved by the page (file paths, names,
+// Everything a bubble renders, resolved by the chat view (file paths, names,
 // playback state). `key` changes whenever any of it changes.
 export class BubbleData {
   msg: MsgItem;
+  id: number = 0; // message id when sealed; identifies the row in the list
   senderName: string = '';
   showSender: boolean = false;
   filePath: string = '';
@@ -33,8 +34,10 @@ export class BubbleData {
   playPos: number = 0;   // 0..1
   translated: string = '';
   selected: boolean = false;
+  highlight: boolean = false; // just jumped to
   autoplay: boolean = true;
   dayLabel: string = '';
+  unreadDivider: boolean = false; // "unread messages" line above this bubble
   // Albums: every item, in order. `msg` is the item carrying the caption.
   album: AlbumItem[] = [];
   key: string = '';
@@ -44,10 +47,11 @@ export class BubbleData {
   }
 
   seal(): BubbleData {
+    this.id = this.msg.id;
     this.key = [this.msg.id, this.msg.version, this.filePath, this.thumbPath, this.progress, this.replyText,
       this.read, this.playing, Math.round(this.playPos * 100), this.translated, this.selected, this.showSender,
-      this.senderName, this.dayLabel].join('|') + this.album.map((a: AlbumItem) =>
-      `#${a.msg.id}.${a.msg.version}.${a.filePath}.${a.thumbPath}.${a.progress}`).join('');
+      this.senderName, this.dayLabel, this.highlight, this.unreadDivider].join('|') +
+    this.album.map((a: AlbumItem) => `#${a.msg.id}.${a.msg.version}.${a.filePath}.${a.thumbPath}.${a.progress}`).join('');
     return this;
   }
 
@@ -72,14 +76,10 @@ export interface BubbleActions {
   onMenu: (d: BubbleData) => void;
   onTap: (d: BubbleData) => boolean; // true when consumed (selection mode)
   onLink: (url: string) => void;
-  onMention: (name: string, userId: number) => void;
+  onMention: (d: BubbleData, name: string, userId: number) => void;
   onSender: (d: BubbleData) => void;
 }
 
-const OUT_BG = '#D9F2C6';
-const IN_BG = '#FFFFFF';
-const MEDIA_W = 240;
-const ACCENT = '#3A8DDE';
 function chunk(list: ReactionItem[], size: number): ReactionItem[][] {
   const out: ReactionItem[][] = [];
   for (let i = 0; i < list.length; i += size) {
@@ -98,15 +98,21 @@ function mediaSize(m: MsgItem, maxW: number, maxH: number): number[] {
 
 @Component
 export struct MessageBubble {
-  @Prop data: BubbleData;
+  // Rows are re-created whenever data.key changes, so this is not state.
+  data: BubbleData = new BubbleData(new MsgItem());
   actions: BubbleActions | null = null;
+  // Sizes follow the width of the chat pane (cover screen, unfolded, split).
+  @Prop bubbleMax: number = 320;
+  @Prop mediaW: number = 240;
+  @Prop mediaH: number = 320;
+  @Prop stickerSide: number = 180;
 
   // ---- Header pieces ----
 
   @Builder
   Forwarded() {
     if (this.data.msg.forwardFrom) {
-      Text(`转发自 ${this.data.msg.forwardFrom}`).fontSize(12).fontColor(ACCENT).maxLines(1)
+      Text(`转发自 ${this.data.msg.forwardFrom}`).fontSize(12).fontColor($r('app.color.link')).maxLines(1)
     }
   }
 
@@ -114,14 +120,14 @@ export struct MessageBubble {
   Reply() {
     if (this.data.msg.replyToId) {
       Column() {
-        Text(this.data.replyName || '回复').fontSize(12).fontColor(ACCENT).maxLines(1)
+        Text(this.data.replyName || '回复').fontSize(12).fontColor($r('app.color.link')).maxLines(1)
         Text(this.data.replyText || '…').fontSize(12).maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor('#555555')
+          .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.bubble_meta'))
       }
       .alignItems(HorizontalAlign.Start)
       .padding({ left: 8, top: 2, bottom: 2, right: 4 })
-      .border({ width: { left: 2 }, color: { left: ACCENT } })
-      .backgroundColor('#0F3A8DDE')
+      .border({ width: { left: 2 }, color: { left: $r('app.color.link') } })
+      .backgroundColor($r('app.color.inset'))
       .borderRadius(4)
       .onClick(() => this.actions?.onJump(this.data.msg.replyToId))
     }
@@ -179,8 +185,8 @@ export struct MessageBubble {
           .padding(4).borderRadius(6).backgroundColor('#99E84026').position({ x: 6, y: 28 })
       }
     }
-    .width(mediaSize(this.data.msg, MEDIA_W, 320)[0])
-    .height(mediaSize(this.data.msg, MEDIA_W, 320)[1])
+    .width(mediaSize(this.data.msg, this.mediaW, this.mediaH)[0])
+    .height(mediaSize(this.data.msg, this.mediaW, this.mediaH)[1])
     .borderRadius(10)
     .clip(true)
     .onClick(() => this.tapOr(() => this.actions?.onOpenMedia(this.data)))
@@ -228,7 +234,7 @@ export struct MessageBubble {
     Stack() {
       ForEach(this.data.album, (a: AlbumItem, i: number) => {
         this.AlbumCell(a, this.layout().cells[i], i)
-      }, (a: AlbumItem) => `${a.msg.id}|${a.msg.version}|${a.filePath}|${a.thumbPath}|${a.progress}`)
+      }, (a: AlbumItem) => `${a.msg.id}|${a.msg.version}|${a.filePath}|${a.thumbPath}|${a.progress}|${this.albumW()}`)
     }
     .width(this.layout().width)
     .height(this.layout().height)
@@ -239,14 +245,23 @@ export struct MessageBubble {
   private cachedLayout: AlbumBox | null = null;
   private cachedFor: string = '';
 
+  private albumW(): number {
+    return Math.min(this.mediaW + 20, this.bubbleMax - 20);
+  }
+
   layout(): AlbumBox {
-    const sig = this.data.album.map((a: AlbumItem) => `${a.msg.width}x${a.msg.height}`).join(',');
+    const sig = this.data.album.map((a: AlbumItem) => `${a.msg.width}x${a.msg.height}`).join(',') +
+      `|${this.albumW()}|${this.mediaH}`;
     if (!this.cachedLayout || this.cachedFor !== sig) {
       this.cachedFor = sig;
       this.cachedLayout = albumLayout(this.data.album.map((a: AlbumItem) =>
-        a.msg.width && a.msg.height ? a.msg.width / a.msg.height : 1), MEDIA_W + 20, 340);
+        a.msg.width && a.msg.height ? a.msg.width / a.msg.height : 1), this.albumW(), this.mediaH + 20);
     }
     return this.cachedLayout;
+  }
+
+  private noteSide(): number {
+    return Math.min(200, this.mediaW);
   }
 
   @Builder
@@ -254,14 +269,14 @@ export struct MessageBubble {
     Stack() {
       if (this.data.playing && this.data.filePath) {
         Video({ src: 'file://' + this.data.filePath })
-          .width(200).height(200).autoPlay(true).controls(false).objectFit(ImageFit.Cover)
+          .width('100%').height('100%').autoPlay(true).controls(false).objectFit(ImageFit.Cover)
           .onFinish(() => this.actions?.onAudio(this.data))
       } else if (this.data.thumbPath && !this.data.msg.thumbIsVideo) {
-        Image('file://' + this.data.thumbPath).width(200).height(200).objectFit(ImageFit.Cover)
+        Image('file://' + this.data.thumbPath).width('100%').height('100%').objectFit(ImageFit.Cover)
       } else if (this.data.msg.minithumb) {
-        Image(minithumbUri(this.data.msg.minithumb)).width(200).height(200).objectFit(ImageFit.Cover).blur(8)
+        Image(minithumbUri(this.data.msg.minithumb)).width('100%').height('100%').objectFit(ImageFit.Cover).blur(8)
       } else {
-        Column().width(200).height(200).backgroundColor('#33000000')
+        Column().width('100%').height('100%').backgroundColor('#33000000')
       }
       if (this.data.progress >= 0) {
         this.Progress()
@@ -271,9 +286,9 @@ export struct MessageBubble {
       }
       Text(formatDuration(this.data.msg.duration)).fontSize(11).fontColor(Color.White)
         .padding({ left: 5, right: 5 }).borderRadius(6).backgroundColor('#66000000')
-        .position({ x: 16, y: 170 })
+        .position({ x: this.noteSide() * 0.08, y: this.noteSide() * 0.85 })
     }
-    .width(200).height(200).borderRadius(100).clip(true)
+    .width(this.noteSide()).height(this.noteSide()).borderRadius(this.noteSide() / 2).clip(true)
     .onClick(() => this.tapOr(() => this.actions?.onAudio(this.data)))
   }
 
@@ -289,8 +304,8 @@ export struct MessageBubble {
                 .width(3)
                 .height(Math.max(3, v * 24))
                 .borderRadius(1.5)
-                .backgroundColor(i / 40 <= this.data.playPos && this.data.playing ? ACCENT :
-                  (this.data.msg.outgoing ? '#8BC37A' : '#B5C7D8'))
+                .backgroundColor(i / 40 <= this.data.playPos && this.data.playing ? $r('app.color.link') :
+                  (this.data.msg.outgoing ? $r('app.color.wave_out') : $r('app.color.wave_in')))
             }, (v: number, i: number) => `${i}`)
           }
           .height(26)
@@ -302,16 +317,17 @@ export struct MessageBubble {
           })
           Row({ space: 6 }) {
             Text(formatDuration(this.data.playing ? this.data.playPos * this.data.msg.duration : this.data.msg.duration))
-              .fontSize(12).fontColor('#777777')
+              .fontSize(12).fontColor($r('app.color.bubble_meta'))
             if (!this.data.msg.listened && !this.data.msg.outgoing) {
-              Column().width(6).height(6).borderRadius(3).backgroundColor(ACCENT)
+              Column().width(6).height(6).borderRadius(3).backgroundColor($r('app.color.link'))
             }
           }
         }
         .alignItems(HorizontalAlign.Start)
       }
       if (this.data.msg.recognized) {
-        Text(this.data.msg.recognized).fontSize(14).fontColor('#333333').constraintSize({ maxWidth: MEDIA_W })
+        Text(this.data.msg.recognized).fontSize(14).fontColor($r('app.color.text_primary'))
+          .constraintSize({ maxWidth: this.mediaW })
       }
     }
     .alignItems(HorizontalAlign.Start)
@@ -327,7 +343,7 @@ export struct MessageBubble {
         Text(this.data.playing ? '❚❚' : (this.data.filePath ? '▶' : '⬇')).fontSize(16).fontColor(Color.White)
       }
     }
-    .width(44).height(44).borderRadius(22).backgroundColor(ACCENT)
+    .width(44).height(44).borderRadius(22).backgroundColor($r('app.color.accent'))
     .onClick(() => this.tapOr(() => this.actions?.onAudio(this.data)))
   }
 
@@ -337,8 +353,9 @@ export struct MessageBubble {
       this.PlayButton()
       Column({ space: 2 }) {
         Text(this.data.msg.title).fontSize(14).fontWeight(FontWeight.Medium).maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(this.data.msg.performer || formatSize(this.data.msg.fileSize)).fontSize(12).fontColor('#777777').maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.text_primary'))
+        Text(this.data.msg.performer || formatSize(this.data.msg.fileSize)).fontSize(12)
+          .fontColor($r('app.color.bubble_meta')).maxLines(1)
         if (this.data.playing) {
           Slider({ value: this.data.playPos * 100, min: 0, max: 100 })
             .width(150).blockSize({ width: 10, height: 10 })
@@ -348,13 +365,13 @@ export struct MessageBubble {
               }
             })
         } else {
-          Text(formatDuration(this.data.msg.duration)).fontSize(12).fontColor('#777777')
+          Text(formatDuration(this.data.msg.duration)).fontSize(12).fontColor($r('app.color.bubble_meta'))
         }
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
     }
-    .width(MEDIA_W)
+    .width(this.mediaW)
   }
 
   @Builder
@@ -371,50 +388,52 @@ export struct MessageBubble {
           Text(this.data.filePath ? '📄' : '⬇').fontSize(20).fontColor(Color.White)
         }
       }
-      .width(48).height(48).borderRadius(8).backgroundColor(ACCENT)
+      .width(48).height(48).borderRadius(8).backgroundColor($r('app.color.accent'))
       Column({ space: 2 }) {
         Text(this.data.msg.fileName).fontSize(14).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .fontColor($r('app.color.text_primary'))
         Text(this.data.progress >= 0 ? `${this.data.progress}% · ${formatSize(this.data.msg.fileSize)}` :
-          formatSize(this.data.msg.fileSize)).fontSize(12).fontColor('#777777')
+          formatSize(this.data.msg.fileSize)).fontSize(12).fontColor($r('app.color.bubble_meta'))
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
     }
-    .width(MEDIA_W)
+    .width(this.mediaW)
     .onClick(() => this.tapOr(() => this.actions?.onFile(this.data)))
   }
+
   @Builder
   Poll() {
     Column({ space: 6 }) {
-      Text(this.data.msg.pollQuestion).fontSize(15).fontWeight(FontWeight.Medium)
+      Text(this.data.msg.pollQuestion).fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
       Text(`${this.data.msg.pollQuiz ? '测验' : '投票'}${this.data.msg.pollClosed ? ' · 已结束' : ''}`)
-        .fontSize(12).fontColor('#777777')
+        .fontSize(12).fontColor($r('app.color.bubble_meta'))
       ForEach(this.data.msg.pollOptions, (op: PollOptionItem, i: number) => {
         Column({ space: 2 }) {
           Row() {
-            Text(`${op.chosen ? '✓ ' : ''}${op.text}`).fontSize(14).layoutWeight(1)
+            Text(`${op.chosen ? '✓ ' : ''}${op.text}`).fontSize(14).layoutWeight(1).fontColor($r('app.color.text_primary'))
             if (this.data.msg.pollVoted || this.data.msg.pollClosed) {
-              Text(`${op.percent}%`).fontSize(13).fontColor('#555555')
+              Text(`${op.percent}%`).fontSize(13).fontColor($r('app.color.bubble_meta'))
             }
           }
           if (this.data.msg.pollVoted || this.data.msg.pollClosed) {
-            Progress({ value: op.percent, total: 100, type: ProgressType.Linear }).color(ACCENT).height(4)
+            Progress({ value: op.percent, total: 100, type: ProgressType.Linear }).color($r('app.color.link')).height(4)
           }
         }
         .width('100%')
         .padding(6)
         .borderRadius(6)
-        .backgroundColor('#0D000000')
+        .backgroundColor($r('app.color.inset'))
         .onClick(() => {
           if (!this.data.msg.pollVoted && !this.data.msg.pollClosed) {
             this.actions?.onVote(this.data, i);
           }
         })
       }, (op: PollOptionItem, i: number) => `${i}|${op.voters}|${op.chosen}`)
-      Text(`${this.data.msg.pollTotal} 人参与`).fontSize(12).fontColor('#777777')
+      Text(`${this.data.msg.pollTotal} 人参与`).fontSize(12).fontColor($r('app.color.bubble_meta'))
     }
     .alignItems(HorizontalAlign.Start)
-    .width(MEDIA_W)
+    .width(this.mediaW)
   }
 
   @Builder
@@ -423,12 +442,12 @@ export struct MessageBubble {
       Stack() {
         Text('📍').fontSize(40)
       }
-      .width(MEDIA_W).height(120).borderRadius(8).backgroundColor('#DDE8D4')
+      .width(this.mediaW).height(120).borderRadius(8).backgroundColor($r('app.color.inset'))
       if (this.data.msg.title) {
-        Text(this.data.msg.title).fontSize(14).fontWeight(FontWeight.Medium)
+        Text(this.data.msg.title).fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
       }
       Text(this.data.msg.address || `${this.data.msg.lat.toFixed(5)}, ${this.data.msg.lon.toFixed(5)}`)
-        .fontSize(12).fontColor('#555555')
+        .fontSize(12).fontColor($r('app.color.bubble_meta'))
     }
     .alignItems(HorizontalAlign.Start)
     .onClick(() => this.tapOr(() => this.actions?.onLocation(this.data)))
@@ -438,14 +457,47 @@ export struct MessageBubble {
   Contact() {
     Row({ space: 10 }) {
       Text('👤').fontSize(26).width(44).height(44).textAlign(TextAlign.Center).borderRadius(22)
-        .backgroundColor('#E0E8F0')
+        .backgroundColor($r('app.color.inset'))
       Column() {
-        Text(this.data.msg.title).fontSize(14).fontWeight(FontWeight.Medium)
-        Text(this.data.msg.phone).fontSize(12).fontColor('#555555')
+        Text(this.data.msg.title).fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+        Text(this.data.msg.phone).fontSize(12).fontColor($r('app.color.bubble_meta'))
       }
       .alignItems(HorizontalAlign.Start)
     }
     .onClick(() => this.tapOr(() => this.actions?.onContact(this.data)))
+  }
+
+  // Card under a text message describing the first link in it.
+  @Builder
+  LinkPreview() {
+    if (this.data.msg.linkUrl && (this.data.msg.linkTitle || this.data.msg.linkSite || this.data.msg.linkText)) {
+      Column({ space: 2 }) {
+        if (this.data.msg.linkSite) {
+          Text(this.data.msg.linkSite).fontSize(13).fontColor($r('app.color.link')).fontWeight(FontWeight.Medium)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        if (this.data.msg.linkTitle) {
+          Text(this.data.msg.linkTitle).fontSize(14).fontWeight(FontWeight.Medium).maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.text_primary'))
+        }
+        if (this.data.msg.linkText) {
+          Text(this.data.msg.linkText).fontSize(13).maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis })
+            .fontColor($r('app.color.text_primary'))
+        }
+        if (this.data.thumbPath && this.data.msg.width > 0 && this.data.msg.height > 0) {
+          Image('file://' + this.data.thumbPath).objectFit(ImageFit.Cover).borderRadius(6).margin({ top: 4 })
+            .width(this.mediaW - 12)
+            .height(Math.min(170, (this.mediaW - 12) * this.data.msg.height / this.data.msg.width))
+        }
+      }
+      .alignItems(HorizontalAlign.Start)
+      .width(this.mediaW)
+      .padding({ left: 8, right: 4, top: 4, bottom: 4 })
+      .border({ width: { left: 2 }, color: { left: $r('app.color.link') } })
+      .backgroundColor($r('app.color.inset'))
+      .borderRadius(4)
+      .onClick(() => this.tapOr(() => this.actions?.onLink(this.data.msg.linkUrl)))
+    }
   }
 
   @Builder
@@ -475,9 +527,9 @@ export struct MessageBubble {
         Text(this.data.msg.callVideo ? '📹' : '📞').fontSize(22)
         Column() {
           Text(this.data.msg.outgoing ? '呼出' : (this.data.msg.callMissed ? '未接来电' : '呼入')).fontSize(14)
-            .fontColor(this.data.msg.callMissed ? Color.Red : '#000000')
+            .fontColor(this.data.msg.callMissed ? $r('app.color.danger') : $r('app.color.text_primary'))
           if (this.data.msg.duration) {
-            Text(formatDuration(this.data.msg.duration)).fontSize(12).fontColor('#777777')
+            Text(formatDuration(this.data.msg.duration)).fontSize(12).fontColor($r('app.color.bubble_meta'))
           }
         }
         .alignItems(HorizontalAlign.Start)
@@ -487,16 +539,19 @@ export struct MessageBubble {
       FormattedText({
         text: this.data.msg.text, entities: this.data.msg.entities,
         onLink: (u: string) => this.actions?.onLink(u),
-        onMention: (n: string, id: number) => this.actions?.onMention(n, id)
+        onMention: (n: string, id: number) => this.actions?.onMention(this.data, n, id)
       })
-        .constraintSize({ maxWidth: this.data.album.length > 0 ? MEDIA_W + 20 :
-          (this.isMediaKind() ? MEDIA_W : '100%') })
+        .constraintSize({ maxWidth: this.data.album.length > 0 ? this.albumW() :
+          (this.isMediaKind() ? this.mediaW : '100%') })
     } else if (this.data.msg.kind === 'unsupported') {
-      Text(this.data.msg.text).fontSize(14).fontColor('#777777').fontStyle(FontStyle.Italic)
+      Text(this.data.msg.text).fontSize(14).fontColor($r('app.color.bubble_meta')).fontStyle(FontStyle.Italic)
+    }
+    if (this.data.msg.kind === 'text') {
+      this.LinkPreview()
     }
     if (this.data.translated) {
-      Text(this.data.translated).fontSize(14).fontColor('#2F6F3F').padding({ top: 4 })
-        .border({ width: { top: 0.5 }, color: { top: '#33000000' } })
+      Text(this.data.translated).fontSize(14).fontColor($r('app.color.secret')).padding({ top: 4 })
+        .border({ width: { top: 0.5 }, color: { top: $r('app.color.separator') } })
     }
   }
 
@@ -510,15 +565,15 @@ export struct MessageBubble {
     Row({ space: 4 }) {
       if (this.data.msg.views) {
         Text(`👁 ${this.data.msg.views >= 1000 ? (this.data.msg.views / 1000).toFixed(1) + 'K' : this.data.msg.views}`)
-          .fontSize(11).fontColor('#888888')
+          .fontSize(11).fontColor($r('app.color.bubble_meta'))
       }
       if (this.data.msg.editDate) {
-        Text('已编辑').fontSize(11).fontColor('#888888')
+        Text('已编辑').fontSize(11).fontColor($r('app.color.bubble_meta'))
       }
-      Text(formatTime(this.data.msg.date)).fontSize(11).fontColor('#888888')
+      Text(formatTime(this.data.msg.date)).fontSize(11).fontColor($r('app.color.bubble_meta'))
       if (this.data.msg.outgoing) {
         Text(this.data.msg.failed ? '⚠' : (this.data.msg.pending ? '🕓' : (this.data.read ? '✓✓' : '✓')))
-          .fontSize(11).fontColor(this.data.msg.failed ? Color.Red : '#4FAE4E')
+          .fontSize(11).fontColor(this.data.msg.failed ? $r('app.color.danger') : $r('app.color.tick'))
       }
     }
     // Hug the content: a full-width footer would stretch every bubble.
@@ -536,8 +591,8 @@ export struct MessageBubble {
               Text(`${r.emoji} ${r.count}`).fontSize(13)
                 .padding({ left: 8, right: 8, top: 3, bottom: 3 })
                 .borderRadius(12)
-                .backgroundColor(r.chosen ? ACCENT : '#1A3A8DDE')
-                .fontColor(r.chosen ? Color.White : ACCENT)
+                .backgroundColor(r.chosen ? $r('app.color.accent') : $r('app.color.accent_soft'))
+                .fontColor(r.chosen ? Color.White : $r('app.color.link'))
                 .onClick(() => this.actions?.onReact(this.data, r.emoji))
             }, (r: ReactionItem) => `${r.emoji}|${r.count}|${r.chosen}`)
           }
@@ -584,22 +639,24 @@ export struct MessageBubble {
     if (this.data.msg.kind === 'service') {
       Row() {
         Text(this.data.msg.text).fontSize(13).fontColor(Color.White).textAlign(TextAlign.Center)
-          .padding({ left: 10, right: 10, top: 4, bottom: 4 }).borderRadius(12).backgroundColor('#66556677')
-          .constraintSize({ maxWidth: '85%' })
+          .padding({ left: 10, right: 10, top: 4, bottom: 4 }).borderRadius(12)
+          .backgroundColor($r('app.color.service_bg'))
+          .constraintSize({ maxWidth: this.bubbleMax })
       }
       .width('100%').justifyContent(FlexAlign.Center).padding({ top: 4, bottom: 4 })
     } else {
       Row() {
         Column({ space: 4 }) {
           if (this.data.showSender && !this.data.msg.outgoing) {
-            Text(this.data.senderName).fontSize(13).fontColor(ACCENT).fontWeight(FontWeight.Medium)
+            Text(this.data.senderName).fontSize(13).fontColor($r('app.color.link')).fontWeight(FontWeight.Medium)
+              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
               .onClick(() => this.actions?.onSender(this.data))
           }
           this.Forwarded()
           this.Reply()
           if (this.data.msg.kind === 'sticker') {
             StickerView({ path: this.data.filePath, format: this.data.msg.stickerFormat,
-              thumbPath: this.data.thumbPath, side: 180, autoplay: this.data.autoplay })
+              thumbPath: this.data.thumbPath, side: this.stickerSide, autoplay: this.data.autoplay })
               .onClick(() => this.tapOr(() => this.actions?.onOpenMedia(this.data)))
           } else if (this.data.msg.kind === 'videoNote') {
             this.VideoNote()
@@ -613,8 +670,9 @@ export struct MessageBubble {
         .alignItems(HorizontalAlign.Start)
         .padding(this.isBare() ? 2 : { left: 10, right: 10, top: 6, bottom: 6 })
         .borderRadius(14)
-        .backgroundColor(this.isBare() ? Color.Transparent : (this.data.msg.outgoing ? OUT_BG : IN_BG))
-        .constraintSize({ maxWidth: '82%' })
+        .backgroundColor(this.isBare() ? Color.Transparent :
+          (this.data.msg.outgoing ? $r('app.color.bubble_out') : $r('app.color.bubble_in')))
+        .constraintSize({ maxWidth: this.bubbleMax })
         .gesture(LongPressGesture().onAction(() => this.actions?.onMenu(this.data)))
         .onClick(() => {
           this.actions?.onTap(this.data);
@@ -623,7 +681,8 @@ export struct MessageBubble {
       .width('100%')
       .padding({ left: 8, right: 8, top: 3, bottom: 3 })
       .justifyContent(this.data.msg.outgoing ? FlexAlign.End : FlexAlign.Start)
-      .backgroundColor(this.data.selected ? '#333A8DDE' : Color.Transparent)
+      .backgroundColor(this.data.selected ? $r('app.color.selected') :
+        (this.data.highlight ? $r('app.color.highlight') : Color.Transparent))
     }
   }
 }

@@ -8,9 +8,15 @@ _个人项目，与 Telegram 和华为无关。_
 
 **消息类型**：文字（粗体、斜体、代码、链接、提及、剧透等格式）、图片、视频、GIF、视频消息（圆形）、语音、音乐、文件、贴纸（WEBP 静态、TGS 动画、WEBM 视频）、投票、位置、联系人、骰子、通话记录、系统消息。
 
-**聊天**：回复与跳转原消息、编辑、删除（仅自己或所有人）、转发（可隐藏来源）、多选、置顶消息、表情回应、投票、机器人按钮、消息内搜索、日期分隔、已读双勾、“正在输入”、Markdown 发送、静默发送、草稿同步。
+**聊天**：回复与跳转原消息、编辑、删除（仅自己或所有人）、转发（可隐藏来源）、多选、置顶消息、表情回应、投票、机器人按钮、日期分隔、已读双勾、“正在输入”、Markdown 发送、静默发送、草稿同步、链接预览卡片、话题群组。打开聊天时定位到第一条未读并显示“未读消息”分隔线，按实际看到的位置标记已读。
 
-**媒体**：全屏查看器（左右切换、双指缩放、保存到图库）、语音按住录制（上滑取消，Opus 编码并生成波形）、语音播放（倍速、连续播放下一条、转文字）、批量发送图片和视频、阅后即焚图片、发送位置和投票、贴纸和 GIF 面板。
+**搜索与标签**：聊天内搜索以结果面板显示，点击结果跳转并高亮，面板保持打开可连续跳转。点击消息里的 `#标签` 直接列出本聊天所有带该标签的消息。
+
+**媒体**：全屏查看器（左右切换、双指缩放、保存到图库）、语音按住录制（上滑取消，Opus 编码并生成波形）、语音播放（迷你播放条、倍速、连续播放下一条、转文字）、多张图片和视频按相册发送、拍照和录像、阅后即焚图片、发送位置和投票、贴纸和 GIF 面板。资料页可查看聊天里的媒体、文件、链接、语音和群成员。
+
+**折叠屏与大屏**（按 Huawei Pura X Max 调整）：展开后左边聊天列表、右边内容，资料、设置、联系人、转发等页面也在右栏打开；合上后同一组页面变成单栏，滚动位置、草稿和已打开的页面都保留。分隔条可以拖动（靠近折痕时吸附，双击恢复默认），气泡、图片、贴纸面板和附件菜单按栏宽调整，键盘弹出时压缩布局而不是把标题栏顶出屏幕。设置里可以把分栏改成自动、始终或关闭。
+
+**外观与网络**：深色模式（跟随系统或手动）、SOCKS5 / HTTP / MTProto 代理（登录前也能设置，支持测速和 t.me 代理链接）、连接状态提示。
 
 **私密聊天**：创建、端到端加密收发、状态提示、加密密钥图案比对。
 
@@ -24,8 +30,11 @@ _个人项目，与 Telegram 和华为无关。_
 
 - `entry/src/main/cpp/napi_init.cpp`：TDLib JSON 接口的 NAPI 桥接，后台线程批量接收；二维码编码（[nayuki/QR-Code-generator](https://github.com/nayuki/QR-Code-generator)，MIT）
 - `entry/src/main/cpp/media.cpp`：Opus 语音解码为 WAV、录音编码为 Ogg/Opus 并生成 Telegram 波形、TGS 贴纸解压
-- `entry/src/main/ets/td/`：`TdClient`（多客户端路由）、`Account`（单账号）、`Accounts`（多账号与设置）、`ChatStore`、`MessageStore`、`FileStore`、`Parse`
-- `entry/src/main/ets/pages/`：登录、主页、聊天、媒体查看器、转发、资料、设置、联系人、投票、加密密钥
+- `entry/src/main/ets/td/`：`TdClient`（多客户端路由）、`Account`（单账号）、`Accounts`（多账号与设置）、`ChatStore`、`MessageStore`（每个打开的聊天一个实例）、`FileStore`、`Parse`
+- `entry/src/main/ets/pages/`：登录、主页（聊天列表 + 右栏路由栈）、媒体查看器
+- `entry/src/main/ets/panes/`：在右栏或全屏显示的页面：资料、设置、联系人、转发、投票、加密密钥、代理
+- `entry/src/main/ets/common/`：`Layout`（分栏和尺寸规则）、`Nav`（路由栈）、`ListDiff`、`Tags`，都不依赖界面，有单元测试
+- `tools/`：`build.sh`（测试 + 请求校验 + 构建）、`test.mjs`（单元测试）、`check-td.mjs`（对照 `td_api.tl` 检查代码里每个 TDLib 请求的类型名和字段名）
 - TGS 动画贴纸用 `@ohos/lottie`（MIT，`third_party/lottie-2.0.38.har`）
 
 ## 构建
@@ -55,9 +64,10 @@ _个人项目，与 Telegram 和华为无关。_
 
    ```bash
    echo "sdk.dir=/path/to/ohos-sdk" > local.properties
-   node node_modules/@ohos/hvigor/bin/hvigor.js --mode module \
-     -p module=entry@default -p product=default -p buildMode=release assembleHap --no-daemon
+   tools/build.sh    # 单元测试、TDLib 请求校验，然后 hvigor assembleHap
    ```
+
+   `check-td.mjs` 需要编译 TDLib 时用的 `td_api.tl`，可用 `--schema` 或环境变量 `TD_API_TL` 指定。
 
 ## 限制
 
