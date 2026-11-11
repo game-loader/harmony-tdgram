@@ -12,9 +12,13 @@ import { formatTime } from '../common/Util';
 import { pickAction } from '../common/Menu';
 
 const MUTE_FOREVER = 0x7FFFFFFF;
-// Windows at least this wide (unfolded foldables, tablets) show the chat
-// list and the open chat side by side; narrower ones show one at a time.
-const SPLIT_MIN_WIDTH = 600;
+// Split view (chat list | open chat) is tuned for Huawei Pura X Max:
+// the unfolded 2584x1828 inner screen is landscape, ~800-860vp wide, and
+// splits; held upright it is only ~560-610vp wide and the cover screen
+// (1848x1264, ~390vp) is narrower still, so both show one pane at a time.
+// Upright windows split only when really wide (large tablets).
+const SPLIT_MIN_LANDSCAPE = 600;
+const SPLIT_MIN_PORTRAIT = 840;
 
 class OpenChat {
   chatId: number = 0;
@@ -43,6 +47,7 @@ struct Main {
   @State myPhoto: string = '';
   @State archiveCount: number = 0;
   @State winWidth: number = 0;
+  @State winHeight: number = 0;
   @State open: OpenChat = new OpenChat();
   private chatController: ChatController = new ChatController();
   private openSeq: number = 0;
@@ -166,7 +171,8 @@ struct Main {
   }
 
   private wide(): boolean {
-    return this.winWidth >= SPLIT_MIN_WIDTH;
+    const w = this.winWidth;
+    return w >= SPLIT_MIN_PORTRAIT || (w >= SPLIT_MIN_LANDSCAPE && w > this.winHeight);
   }
 
   openChat(chatId: number, msgId: number = 0): void {
@@ -300,12 +306,14 @@ struct Main {
     .height('100%')
     .onAreaChange((_: Area, area: Area) => {
       this.winWidth = Number(area.width);
+      this.winHeight = Number(area.height);
     })
   }
 
   // Width of the list when shown next to a chat.
   private listWidth(): Length {
-    return this.wide() ? Math.min(400, Math.max(300, this.winWidth * 0.36)) : '100%';
+    // ~38% on the Pura X Max inner screen leaves the chat about 500vp.
+    return this.wide() ? Math.min(400, Math.max(300, this.winWidth * 0.38)) : '100%';
   }
 
   @Builder
