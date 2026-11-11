@@ -3,6 +3,19 @@ import { InlineButton, MsgItem, PollOptionItem, ReactionItem } from '../td/Model
 import { formatDuration } from '../td/Parse';
 import { FormattedText } from './FormattedText';
 import { StickerView } from './StickerView';
+import { AlbumBox, albumLayout, Cell } from './AlbumLayout';
+
+// One photo or video of an album, resolved like a single-media bubble.
+export class AlbumItem {
+  msg: MsgItem;
+  filePath: string = '';
+  thumbPath: string = '';
+  progress: number = -1;
+
+  constructor(msg: MsgItem) {
+    this.msg = msg;
+  }
+}
 
 // Everything a bubble renders, resolved by the page (file paths, names,
 // playback state). `key` changes whenever any of it changes.
@@ -22,6 +35,8 @@ export class BubbleData {
   selected: boolean = false;
   autoplay: boolean = true;
   dayLabel: string = '';
+  // Albums: every item, in order. `msg` is the item carrying the caption.
+  album: AlbumItem[] = [];
   key: string = '';
 
   constructor(msg: MsgItem) {
@@ -31,13 +46,20 @@ export class BubbleData {
   seal(): BubbleData {
     this.key = [this.msg.id, this.msg.version, this.filePath, this.thumbPath, this.progress, this.replyText,
       this.read, this.playing, Math.round(this.playPos * 100), this.translated, this.selected, this.showSender,
-      this.senderName, this.dayLabel].join('|');
+      this.senderName, this.dayLabel].join('|') + this.album.map((a: AlbumItem) =>
+      `#${a.msg.id}.${a.msg.version}.${a.filePath}.${a.thumbPath}.${a.progress}`).join('');
     return this;
+  }
+
+  // Message ids this bubble stands for.
+  ids(): number[] {
+    return this.album.length > 0 ? this.album.map((a: AlbumItem) => a.msg.id) : [this.msg.id];
   }
 }
 
 export interface BubbleActions {
   onOpenMedia: (d: BubbleData) => void;
+  onOpenAlbumItem: (d: BubbleData, index: number) => void;
   onAudio: (d: BubbleData) => void;
   onSeek: (d: BubbleData, fraction: number) => void;
   onFile: (d: BubbleData) => void;
@@ -154,6 +176,69 @@ export struct MessageBubble {
     .borderRadius(10)
     .clip(true)
     .onClick(() => this.tapOr(() => this.actions?.onOpenMedia(this.data)))
+  }
+
+  @Builder
+  AlbumCell(a: AlbumItem, c: Cell, index: number) {
+    Stack() {
+      if (a.msg.kind === 'photo' && a.filePath) {
+        Image('file://' + a.filePath).width('100%').height('100%').objectFit(ImageFit.Cover)
+          .blur(a.msg.hasSpoiler ? 30 : 0)
+      } else if (a.thumbPath && !a.msg.thumbIsVideo) {
+        Image('file://' + a.thumbPath).width('100%').height('100%').objectFit(ImageFit.Cover)
+          .blur(a.msg.hasSpoiler ? 30 : 0)
+      } else if (a.msg.minithumb) {
+        Image(minithumbUri(a.msg.minithumb)).width('100%').height('100%').objectFit(ImageFit.Cover).blur(12)
+      } else {
+        Column().width('100%').height('100%').backgroundColor('#33000000')
+      }
+      if (a.progress >= 0) {
+        Stack() {
+          Progress({ value: a.progress, total: 100, type: ProgressType.Ring })
+            .width(36).height(36).color(Color.White).style({ strokeWidth: 3 })
+        }
+        .width(42).height(42).borderRadius(21).backgroundColor('#66000000')
+      } else if (a.msg.kind === 'video') {
+        Text('▶').fontSize(18).fontColor(Color.White).width(40).height(40).textAlign(TextAlign.Center)
+          .borderRadius(20).backgroundColor('#66000000')
+      }
+      if (a.msg.kind === 'video') {
+        Text(formatDuration(a.msg.duration)).fontSize(11).fontColor(Color.White)
+          .padding({ left: 5, right: 5, top: 1, bottom: 1 }).borderRadius(6).backgroundColor('#66000000')
+          .position({ x: 4, y: 4 })
+      }
+    }
+    .position({ x: c.x, y: c.y })
+    .width(c.w)
+    .height(c.h)
+    .clip(true)
+    .onClick(() => this.tapOr(() => this.actions?.onOpenAlbumItem(this.data, index)))
+  }
+
+  @Builder
+  Album() {
+    Stack() {
+      ForEach(this.data.album, (a: AlbumItem, i: number) => {
+        this.AlbumCell(a, this.layout().cells[i], i)
+      }, (a: AlbumItem) => `${a.msg.id}|${a.msg.version}|${a.filePath}|${a.thumbPath}|${a.progress}`)
+    }
+    .width(this.layout().width)
+    .height(this.layout().height)
+    .borderRadius(10)
+    .clip(true)
+  }
+
+  private cachedLayout: AlbumBox | null = null;
+  private cachedFor: string = '';
+
+  layout(): AlbumBox {
+    const sig = this.data.album.map((a: AlbumItem) => `${a.msg.width}x${a.msg.height}`).join(',');
+    if (!this.cachedLayout || this.cachedFor !== sig) {
+      this.cachedFor = sig;
+      this.cachedLayout = albumLayout(this.data.album.map((a: AlbumItem) =>
+        a.msg.width && a.msg.height ? a.msg.width / a.msg.height : 1), MEDIA_W + 20, 340);
+    }
+    return this.cachedLayout;
   }
 
   @Builder
@@ -357,7 +442,9 @@ export struct MessageBubble {
 
   @Builder
   Content() {
-    if (this.data.msg.kind === 'photo' || this.data.msg.kind === 'animation') {
+    if (this.data.album.length > 0) {
+      this.Album()
+    } else if (this.data.msg.kind === 'photo' || this.data.msg.kind === 'animation') {
       this.Visual(false)
     } else if (this.data.msg.kind === 'video') {
       this.Visual(true)
@@ -394,7 +481,8 @@ export struct MessageBubble {
         onLink: (u: string) => this.actions?.onLink(u),
         onMention: (n: string, id: number) => this.actions?.onMention(n, id)
       })
-        .constraintSize({ maxWidth: this.isMediaKind() ? MEDIA_W : '100%' })
+        .constraintSize({ maxWidth: this.data.album.length > 0 ? MEDIA_W + 20 :
+          (this.isMediaKind() ? MEDIA_W : '100%') })
     } else if (this.data.msg.kind === 'unsupported') {
       Text(this.data.msg.text).fontSize(14).fontColor('#777777').fontStyle(FontStyle.Italic)
     }

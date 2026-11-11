@@ -14,6 +14,7 @@
 #include <td/telegram/td_json_client.h>
 
 #include "media.h"
+#include "stream.h"
 #include "third_party/qrcodegen/qrcodegen.hpp"
 
 #undef LOG_TAG
@@ -160,6 +161,7 @@ static napi_value Init(napi_env env, napi_value exports) {
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     RegisterMedia(env, exports);
+    RegisterStream(env, exports);
     return exports;
 }
 EXTERN_C_END

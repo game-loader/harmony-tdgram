@@ -96,6 +96,7 @@ export function fillContent(item: MsgItem, content: TdObject, nameOf: NameOf): v
       item.height = v['height'] as number;
       item.duration = v['duration'] as number;
       item.fileName = v['file_name'] as string;
+      item.mime = v['mime_type'] as string;
       setThumb(item, v['thumbnail'] as TdObject | undefined, v['minithumbnail'] as TdObject | undefined);
       break;
     }
@@ -357,6 +358,7 @@ export function fillMessage(item: MsgItem, msg: TdObject, nameOf: NameOf): MsgIt
   const sdt = msg['self_destruct_type'] as TdObject | undefined;
   item.selfDestructTime = sdt && sdt['@type'] === 'messageSelfDestructTypeTimer' ?
     sdt['self_destruct_time'] as number : 0;
+  item.albumId = String(msg['media_album_id'] ?? '0');
   item.forwardFrom = forwardName(msg['forward_info'] as TdObject | undefined, nameOf);
   fillInteraction(item, msg['interaction_info'] as TdObject | undefined);
   item.buttons = parseButtons(msg['reply_markup'] as TdObject | undefined);

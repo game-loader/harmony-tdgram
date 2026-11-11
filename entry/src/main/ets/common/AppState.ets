@@ -21,6 +21,9 @@ export class ViewerItem {
   caption: string = '';
   fileId: number = 0;
   name: string = '';
+  size: number = 0;
+  mime: string = '';
+  streamUrl: string = ''; // set while a video plays from a partial download
 }
 
 export function copyText(text: string, toast: string = '已复制'): void {

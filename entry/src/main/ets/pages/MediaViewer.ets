@@ -5,6 +5,7 @@ import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
 import { AppState, ViewerItem } from '../common/AppState';
 import { Accounts } from '../td/Accounts';
 import { AccountEvent } from '../td/Core';
+import { VideoStream } from '../services/VideoStream';
 
 // Full-screen pager for photos, videos and GIFs: swipe between items,
 // pinch to zoom photos, system video controls, save to gallery.
@@ -22,6 +23,7 @@ struct MediaViewer {
   private baseY: number = 0;
   private acc = Accounts.get().active();
   private listener = (e: AccountEvent): void => this.onEvent(e);
+  private streams: Map<number, VideoStream> = new Map(); // by fileId
 
   aboutToAppear(): void {
     this.items = AppState.viewer.slice();
@@ -32,6 +34,21 @@ struct MediaViewer {
 
   aboutToDisappear(): void {
     this.acc.off(this.listener);
+    this.streams.forEach((v: VideoStream) => v.close());
+    this.streams.clear();
+  }
+
+  private copyItem(it: ViewerItem): ViewerItem {
+    const n = new ViewerItem();
+    n.kind = it.kind;
+    n.caption = it.caption;
+    n.fileId = it.fileId;
+    n.name = it.name;
+    n.size = it.size;
+    n.mime = it.mime;
+    n.path = it.path;
+    n.streamUrl = it.streamUrl;
+    return n;
   }
 
   onEvent(e: AccountEvent): void {
@@ -40,14 +57,11 @@ struct MediaViewer {
     }
     let changed = false;
     const next = this.items.map((it: ViewerItem) => {
-      if (!it.path) {
+      // A streaming video keeps its URL so playback isn't restarted.
+      if (!it.path && !it.streamUrl) {
         const p = this.acc.files.known(it.fileId);
         if (p) {
-          const n = new ViewerItem();
-          n.kind = it.kind;
-          n.caption = it.caption;
-          n.fileId = it.fileId;
-          n.name = it.name;
+          const n = this.copyItem(it);
           n.path = p;
           changed = true;
           return n;
@@ -62,9 +76,26 @@ struct MediaViewer {
 
   private ensure(i: number): void {
     const it = this.items[i];
-    if (it && !it.path) {
-      this.acc.files.download(it.fileId, 32);
+    if (!it || it.path || it.streamUrl) {
+      return;
     }
+    if (it.kind === 'video') {
+      const known = this.acc.files.known(it.fileId);
+      const stream = known ? null : VideoStream.open(this.acc, it.fileId, it.size, it.mime);
+      if (known || stream) {
+        const n = this.copyItem(it);
+        n.path = known;
+        if (stream) {
+          this.streams.set(it.fileId, stream);
+          n.streamUrl = stream.url;
+        }
+        const next = this.items.slice();
+        next[i] = n;
+        this.items = next;
+        return;
+      }
+    }
+    this.acc.files.download(it.fileId, 32);
   }
 
   private resetZoom(): void {
@@ -75,7 +106,14 @@ struct MediaViewer {
 
   save(): void {
     const it = this.items[this.index];
+    if (it && !it.path) {
+      const p = this.acc.files.known(it.fileId);
+      if (p) {
+        it.path = p;
+      }
+    }
     if (!it || !it.path) {
+      promptAction.showToast({ message: '还没下载完' });
       return;
     }
     const ctx = getContext(this) as common.UIAbilityContext;
@@ -104,7 +142,7 @@ struct MediaViewer {
   @Builder
   Page(it: ViewerItem) {
     Stack() {
-      if (!it.path) {
+      if (!it.path && !it.streamUrl) {
         LoadingProgress().width(48).height(48).color(Color.White)
       } else if (it.kind === 'photo') {
         Image('file://' + it.path)
@@ -135,7 +173,7 @@ struct MediaViewer {
             TapGesture().onAction(() => { this.chrome = !this.chrome; })
           ))
       } else {
-        Video({ src: 'file://' + it.path })
+        Video({ src: it.streamUrl || ('file://' + it.path) })
           .width('100%')
           .height('100%')
           .autoPlay(true)
@@ -154,7 +192,7 @@ struct MediaViewer {
       Swiper() {
         ForEach(this.items, (it: ViewerItem) => {
           this.Page(it)
-        }, (it: ViewerItem) => `${it.fileId}|${it.path}`)
+        }, (it: ViewerItem) => `${it.fileId}|${it.path}|${it.streamUrl}`)
       }
       .index(this.index)
       .loop(false)

@@ -4,7 +4,7 @@ import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { picker, fileIo as fs } from '@kit.CoreFileKit';
 import { media } from '@kit.MediaKit';
 import { geoLocationManager } from '@kit.LocationKit';
-import { BubbleActions, BubbleData, MessageBubble } from '../components/MessageBubble';
+import { AlbumItem, BubbleActions, BubbleData, MessageBubble } from '../components/MessageBubble';
 import { Avatar } from '../components/Avatar';
 import { StickerPanel } from '../components/StickerPanel';
 import { AppState, copyText, ForwardRequest, ViewerItem } from '../common/AppState';
@@ -28,6 +28,10 @@ interface ChatParams {
 class ReplyPreview {
   name: string = '';
   text: string = '';
+}
+
+function isAlbumKind(m: MsgItem): boolean {
+  return m.kind === 'photo' || m.kind === 'video';
 }
 
 const QUICK_REACTIONS: string[] = ['👍', '❤', '😂', '😮', '😢', '🔥', '👏', '🎉'];
@@ -68,6 +72,7 @@ struct Chat {
   private atBottom: boolean = true;
   private firstLoad: boolean = true;
   private pendingJump: number = 0;
+  private lastShownId: number = 0;
   private lastTyping: number = 0;
   private searchResults: number[] = [];
   private searchIndex: number = 0;
@@ -199,39 +204,67 @@ struct Chat {
     const isGroup = this.chat !== undefined && (this.chat.type === 'group' || this.chat.type === 'supergroup');
     const readUpTo = this.chat ? this.chat.lastReadOutboxId : 0;
     const settings = Accounts.get().settings;
-    const prevLastId = this.bubbles.length > 0 ? this.bubbles[this.bubbles.length - 1].msg.id : 0;
+    const prevLastId = this.lastShownId;
     const files = this.acc.files;
-    this.bubbles = msgs.map((m: MsgItem, i: number) => {
-      const d = new BubbleData(m);
+    const resolve = (m: MsgItem): AlbumItem => {
+      const it = new AlbumItem(m);
+      it.filePath = this.autoDownload(m) ? (m.filePath || files.path(m.fileId, 8)) : files.known(m.fileId, m.filePath);
+      it.thumbPath = m.thumbPath || files.path(m.thumbFileId, 16);
+      const prog = files.progress.get(m.fileId);
+      it.progress = prog !== undefined && !it.filePath ? prog : -1;
+      return it;
+    };
+    const out: BubbleData[] = [];
+    let i = 0;
+    while (i < msgs.length) {
+      // Consecutive photos and videos sharing media_album_id become one bubble.
+      let j = i + 1;
+      if (msgs[i].albumId !== '0' && isAlbumKind(msgs[i])) {
+        while (j < msgs.length && msgs[j].albumId === msgs[i].albumId && isAlbumKind(msgs[j])) {
+          j++;
+        }
+      }
+      const group = msgs.slice(i, j);
       const prev = i > 0 ? msgs[i - 1] : undefined;
+      const captioned = group.find((x: MsgItem) => x.text !== '');
+      const m = captioned ?? group[0];
+      const d = new BubbleData(m);
+      if (group.length > 1) {
+        d.album = group.map(resolve);
+      }
       d.showSender = isGroup && (!prev || prev.senderId !== m.senderId || prev.kind === 'service');
       d.senderName = this.acc.chats.nameOf(m.senderId, m.senderIsChat);
-      d.filePath = this.autoDownload(m) ? (m.filePath || files.path(m.fileId, 8)) : files.known(m.fileId, m.filePath);
-      d.thumbPath = m.thumbPath || files.path(m.thumbFileId, 16);
-      const prog = files.progress.get(m.fileId);
-      d.progress = prog !== undefined && !d.filePath ? prog : -1;
+      const self = resolve(m);
+      d.filePath = self.filePath;
+      d.thumbPath = self.thumbPath;
+      d.progress = self.progress;
       if (m.replyToId) {
         const r = this.replyPreview(m);
         d.replyName = r.name;
         d.replyText = r.text;
       }
-      d.read = m.outgoing && m.id <= readUpTo;
+      const lastOfGroup = group[group.length - 1];
+      d.read = m.outgoing && lastOfGroup.id <= readUpTo;
       const key = `${m.chatId}:${m.id}`;
       d.playing = this.audioPlayer.key === key;
       d.playPos = d.playing && this.audioPlayer.duration > 0 ? this.audioPlayer.position / this.audioPlayer.duration : 0;
       d.translated = this.translations.get(m.id) ?? '';
-      d.selected = this.selected.includes(m.id);
+      d.selected = group.some((x: MsgItem) => this.selected.includes(x.id));
       d.autoplay = settings.autoplayGifs;
       if (!prev || formatDay(prev.date) !== formatDay(m.date)) {
         d.dayLabel = formatDay(m.date);
       }
-      return d.seal();
-    });
+      out.push(d.seal());
+      i = j;
+    }
+    this.bubbles = out;
+    const lastId = msgs.length > 0 ? msgs[msgs.length - 1].id : 0;
+    this.lastShownId = lastId;
     if (!messagesChanged || this.bubbles.length === 0) {
       return;
     }
     if (this.pendingJump) {
-      const idx = this.bubbles.findIndex((b: BubbleData) => b.msg.id === this.pendingJump);
+      const idx = this.bubbles.findIndex((b: BubbleData) => b.ids().includes(this.pendingJump));
       if (idx >= 0) {
         this.pendingJump = 0;
         this.firstLoad = false;
@@ -239,7 +272,6 @@ struct Chat {
       }
       return;
     }
-    const lastId = this.bubbles[this.bubbles.length - 1].msg.id;
     if (this.firstLoad || (lastId !== prevLastId && this.atBottom)) {
       this.firstLoad = false;
       setTimeout((): void => { this.scroller.scrollToIndex(this.bubbles.length - 1); }, 0);
@@ -247,7 +279,7 @@ struct Chat {
   }
 
   jumpTo(id: number): void {
-    const idx = this.bubbles.findIndex((b: BubbleData) => b.msg.id === id);
+    const idx = this.bubbles.findIndex((b: BubbleData) => b.ids().includes(id));
     if (idx >= 0) {
       this.scroller.scrollToIndex(idx, true, ScrollAlign.CENTER);
       return;
@@ -437,11 +469,22 @@ struct Chat {
   // ---- Media interaction ----
 
   openMedia(d: BubbleData): void {
-    const m = d.msg;
+    this.openMediaMsg(d.msg, d.filePath);
+  }
+
+  openAlbumItem(d: BubbleData, index: number): void {
+    const a = d.album[index];
+    if (a) {
+      this.openMediaMsg(a.msg, a.filePath);
+    }
+  }
+
+  private openMediaMsg(m: MsgItem, filePath: string): void {
     if (m.kind === 'sticker') {
       return;
     }
-    if (!d.filePath) {
+    // Videos stream in the viewer; photos and GIFs download first.
+    if (!filePath && m.kind !== 'video') {
       if (this.acc.files.isDownloading(m.fileId)) {
         this.acc.files.cancel(m.fileId);
       } else {
@@ -454,19 +497,29 @@ struct Chat {
     if (m.selfDestructTime) {
       this.acc.messages.opened(m);
     }
-    // Pager over every visual message of the loaded window.
-    const visual = this.bubbles.filter((b: BubbleData) =>
-      b.msg.kind === 'photo' || b.msg.kind === 'video' || b.msg.kind === 'animation');
-    AppState.viewer = visual.map((b: BubbleData) => {
+    // Pager over every visual message of the loaded window, albums flattened.
+    const visual: AlbumItem[] = [];
+    for (const b of this.bubbles) {
+      if (b.album.length > 0) {
+        b.album.forEach((a: AlbumItem) => visual.push(a));
+      } else if (b.msg.kind === 'photo' || b.msg.kind === 'video' || b.msg.kind === 'animation') {
+        const a = new AlbumItem(b.msg);
+        a.filePath = b.filePath;
+        visual.push(a);
+      }
+    }
+    AppState.viewer = visual.map((a: AlbumItem) => {
       const v = new ViewerItem();
-      v.kind = b.msg.kind;
-      v.path = b.filePath || this.acc.files.known(b.msg.fileId);
-      v.caption = b.msg.text;
-      v.fileId = b.msg.fileId;
-      v.name = b.msg.fileName || `${b.msg.id}.${b.msg.kind === 'photo' ? 'jpg' : 'mp4'}`;
+      v.kind = a.msg.kind;
+      v.path = a.filePath || this.acc.files.known(a.msg.fileId);
+      v.caption = a.msg.text;
+      v.fileId = a.msg.fileId;
+      v.size = a.msg.fileSize;
+      v.mime = a.msg.mime;
+      v.name = a.msg.fileName || `${a.msg.id}.${a.msg.kind === 'photo' ? 'jpg' : 'mp4'}`;
       return v;
     });
-    AppState.viewerIndex = Math.max(0, visual.findIndex((b: BubbleData) => b.msg.id === m.id));
+    AppState.viewerIndex = Math.max(0, visual.findIndex((a: AlbumItem) => a.msg.id === m.id));
     router.pushUrl({ url: 'pages/MediaViewer' });
   }
 
@@ -615,8 +668,9 @@ struct Chat {
     if (this.selected.length === 0) {
       return false;
     }
-    const id = d.msg.id;
-    this.selected = this.selected.includes(id) ? this.selected.filter((x: number) => x !== id) : this.selected.concat([id]);
+    const ids = d.ids();
+    this.selected = d.selected ? this.selected.filter((x: number) => !ids.includes(x)) :
+      this.selected.concat(ids.filter((x: number) => !this.selected.includes(x)));
     this.rebuild(false);
     return true;
   }
@@ -648,8 +702,8 @@ struct Chat {
         });
       }
       if (p['can_be_forwarded']) {
-        add('转发', () => this.forward([m.id], false));
-        add('转发（不显示来源）', () => this.forward([m.id], true));
+        add('转发', () => this.forward(d.ids(), false));
+        add('转发（不显示来源）', () => this.forward(d.ids(), true));
       }
       if (p['can_be_pinned']) {
         const pinned = this.acc.messages.pinned && this.acc.messages.pinned.id === m.id;
@@ -668,12 +722,12 @@ struct Chat {
         });
       }
       add('选择', () => {
-        this.selected = [m.id];
+        this.selected = d.ids();
         this.rebuild(false);
       });
       add('详细信息', () => this.showInfo(m));
       if (p['can_be_deleted_only_for_self'] || p['can_be_deleted_for_all_users']) {
-        add('删除', () => this.confirmDelete([m.id], p['can_be_deleted_for_all_users'] as boolean));
+        add('删除', () => this.confirmDelete(d.ids(), p['can_be_deleted_for_all_users'] as boolean));
       }
       this.showReactionsThenMenu(m, items, actions);
     }).catch(() => {});
@@ -833,6 +887,7 @@ struct Chat {
   private actions(): BubbleActions {
     return {
       onOpenMedia: (d: BubbleData) => this.openMedia(d),
+      onOpenAlbumItem: (d: BubbleData, i: number) => this.openAlbumItem(d, i),
       onAudio: (d: BubbleData) => this.playAudio(d),
       onSeek: (d: BubbleData, f: number) => this.audioPlayer.seek(f),
       onFile: (d: BubbleData) => this.openFile(d),
@@ -864,7 +919,7 @@ struct Chat {
         })
         Text(`已选择 ${this.selected.length} 条`).fontSize(17).layoutWeight(1)
         Button('复制', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => {
-          const texts = this.bubbles.filter((b: BubbleData) => this.selected.includes(b.msg.id))
+          const texts = this.bubbles.filter((b: BubbleData) => b.selected)
             .map((b: BubbleData) => summary(b.msg));
           copyText(texts.join('\n'));
           this.selected = [];

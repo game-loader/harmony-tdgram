@@ -9,6 +9,8 @@ export class FileStore {
   private requested: Set<number> = new Set();
   // Percent (0-100) of active downloads and uploads, by file id.
   progress: Map<number, number> = new Map();
+  // Raw updateFile listeners, e.g. for streaming playback.
+  private watchers: Map<number, (file: TdObject) => void> = new Map();
 
   constructor(core: AccountCore) {
     this.core = core;
@@ -54,6 +56,14 @@ export class FileStore {
     this.core.emit('files');
   }
 
+  watch(fileId: number, fn: (file: TdObject) => void): void {
+    this.watchers.set(fileId, fn);
+  }
+
+  unwatch(fileId: number): void {
+    this.watchers.delete(fileId);
+  }
+
   isDownloading(fileId: number): boolean {
     return this.requested.has(fileId) && !this.paths.has(fileId);
   }
@@ -66,6 +76,10 @@ export class FileStore {
 
   private onFile(file: TdObject): void {
     const id = file['id'] as number;
+    const watcher = this.watchers.get(id);
+    if (watcher) {
+      watcher(file);
+    }
     const path = localPath(file);
     const size = (file['size'] as number) || (file['expected_size'] as number) || 0;
     const local = file['local'] as TdObject;

@@ -16,7 +16,7 @@ foreach(lib opusenc opusfile opus ogg)
     set_target_properties(${lib} PROPERTIES IMPORTED_LOCATION ${PREBUILT}/lib${lib}.a)
 endforeach()
 
-add_library(tdbridge SHARED napi_init.cpp media.cpp third_party/qrcodegen/qrcodegen.cpp)
+add_library(tdbridge SHARED napi_init.cpp media.cpp stream.cpp third_party/qrcodegen/qrcodegen.cpp)
 target_include_directories(tdbridge PRIVATE include ${PREBUILT}/include ${PREBUILT}/include/opus)
 target_link_libraries(tdbridge PUBLIC tdjson opusenc opusfile opus ogg z
     libace_napi.z.so libhilog_ndk.z.so)

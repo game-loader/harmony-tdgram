@@ -99,6 +99,7 @@ export class MsgItem {
   selfDestructIn: number = 0;
   selfDestructTime: number = 0;
   hasSpoiler: boolean = false;
+  albumId: string = '0'; // media_album_id; messages sharing it form one album
   // Media: main file plus a preview (thumbnail file and inline minithumbnail).
   fileId: number = 0;
   filePath: string = '';

@@ -27,3 +27,15 @@ export interface EncodedVoice {
 export const encoderStart: (path: string, sampleRate: number) => boolean;
 export const encoderWrite: (pcm: ArrayBuffer) => void;
 export const encoderStop: () => EncodedVoice;
+
+export interface StreamHandle {
+  id: number;
+  url: string; // loopback http URL for the system player
+}
+// Streaming playback of files TDLib is still downloading. onNeed asks for the
+// download to continue from `offset` because the player is waiting there.
+export const streamStart: (onNeed: (id: number, offset: number) => void) => boolean;
+export const streamOpen: (size: number, mime: string) => StreamHandle;
+// Bytes [offset, offset + length) of the file at path are on disk.
+export const streamAvailable: (id: number, path: string, offset: number, length: number) => void;
+export const streamClose: (id: number) => void;
