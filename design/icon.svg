@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#6FD3FF"/>
+      <stop offset="1" stop-color="#2B7FE0"/>
+    </linearGradient>
+    <linearGradient id="fur" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFB45A"/>
+      <stop offset="1" stop-color="#F28A2E"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#sky)"/>
+  <!-- clouds -->
+  <g fill="#FFFFFF" opacity="0.85">
+    <circle cx="190" cy="250" r="55"/><circle cx="250" cy="225" r="70"/><circle cx="320" cy="255" r="50"/>
+    <rect x="140" y="250" width="230" height="55" rx="27"/>
+    <circle cx="760" cy="790" r="50"/><circle cx="820" cy="765" r="65"/><circle cx="885" cy="795" r="45"/>
+    <rect x="715" y="790" width="215" height="50" rx="25"/>
+  </g>
+  <!-- speed lines -->
+  <g stroke="#FFFFFF" stroke-width="18" stroke-linecap="round" opacity="0.7">
+    <line x1="90" y1="640" x2="230" y2="600"/>
+    <line x1="130" y1="720" x2="300" y2="672"/>
+    <line x1="220" y1="800" x2="360" y2="760"/>
+  </g>
+  <!-- scarf trailing behind -->
+  <path d="M440 360 C380 350 330 330 270 360 C300 375 330 380 360 385 C320 400 290 420 250 425 C320 440 390 410 450 395 Z" fill="#E8453C"/>
+  <!-- tail -->
+  <path d="M390 450 C300 450 290 360 340 340" fill="none" stroke="#F28A2E" stroke-width="34" stroke-linecap="round"/>
+  <!-- paper plane -->
+  <polygon points="880,330 170,540 470,610" fill="#FFFFFF"/>
+  <polygon points="880,330 470,610 550,800" fill="#D7E9FA"/>
+  <polygon points="470,610 430,720 550,800" fill="#A9CBEE"/>
+  <!-- cat body -->
+  <ellipse cx="480" cy="410" rx="100" ry="88" fill="url(#fur)"/>
+  <ellipse cx="490" cy="430" rx="52" ry="50" fill="#FFF1DE"/>
+  <!-- front paws -->
+  <ellipse cx="455" cy="485" rx="30" ry="20" fill="#FFB45A"/>
+  <ellipse cx="530" cy="465" rx="30" ry="20" fill="#FFB45A"/>
+  <!-- scarf knot -->
+  <path d="M410 345 Q500 385 585 330 L590 362 Q500 410 410 375 Z" fill="#E8453C"/>
+  <!-- ears -->
+  <polygon points="425,230 440,140 500,200" fill="#F28A2E"/>
+  <polygon points="545,195 610,140 600,235" fill="#F28A2E"/>
+  <polygon points="440,215 448,168 482,203" fill="#FFC9C9"/>
+  <polygon points="560,200 597,168 592,218" fill="#FFC9C9"/>
+  <!-- head -->
+  <ellipse cx="512" cy="275" rx="100" ry="88" fill="#FFB45A"/>
+  <!-- stripes -->
+  <path d="M495 190 L500 225 M520 188 L518 222 M545 192 L536 224" stroke="#E07A22" stroke-width="10" stroke-linecap="round"/>
+  <!-- pilot goggles on forehead -->
+  <rect x="418" y="212" width="190" height="20" rx="10" fill="#6B4A2B"/>
+  <circle cx="478" cy="222" r="30" fill="#8FD8FF" stroke="#6B4A2B" stroke-width="10"/>
+  <circle cx="550" cy="222" r="30" fill="#8FD8FF" stroke="#6B4A2B" stroke-width="10"/>
+  <circle cx="468" cy="212" r="8" fill="#FFFFFF"/>
+  <circle cx="540" cy="212" r="8" fill="#FFFFFF"/>
+  <!-- eyes -->
+  <ellipse cx="475" cy="285" rx="14" ry="18" fill="#2B2B2B"/>
+  <ellipse cx="555" cy="285" rx="14" ry="18" fill="#2B2B2B"/>
+  <circle cx="480" cy="278" r="5" fill="#FFFFFF"/>
+  <circle cx="560" cy="278" r="5" fill="#FFFFFF"/>
+  <!-- blush -->
+  <ellipse cx="447" cy="318" rx="18" ry="10" fill="#FF8A80" opacity="0.7"/>
+  <ellipse cx="583" cy="318" rx="18" ry="10" fill="#FF8A80" opacity="0.7"/>
+  <!-- nose and mouth -->
+  <polygon points="507,305 523,305 515,315" fill="#E9666B"/>
+  <path d="M515 315 Q515 330 500 330 M515 315 Q515 330 530 330" fill="none" stroke="#2B2B2B" stroke-width="5" stroke-linecap="round"/>
+  <!-- whiskers -->
+  <g stroke="#2B2B2B" stroke-width="4" stroke-linecap="round">
+    <line x1="430" y1="305" x2="385" y2="298"/><line x1="430" y1="318" x2="388" y2="322"/>
+    <line x1="600" y1="305" x2="645" y2="298"/><line x1="600" y1="318" x2="642" y2="322"/>
+  </g>
+</svg>
