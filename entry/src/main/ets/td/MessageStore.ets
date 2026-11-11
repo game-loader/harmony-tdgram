@@ -37,8 +37,13 @@ export class MessageStore {
     return this.parse(raw);
   }
 
-  open(chatId: number): void {
-    this.close();
+  private session: number = 0;
+
+  // Returns a session token for close(). In split view the next chat can
+  // open before the previous view is torn down; a stale close is ignored.
+  open(chatId: number): number {
+    this.closeChat();
+    this.session++;
     this.chatId = chatId;
     this.messages = [];
     this.olderDone = false;
@@ -47,9 +52,16 @@ export class MessageStore {
     this.core.td.send(o({ '@type': 'openChat', 'chat_id': chatId })).catch(() => {});
     this.loadOlder();
     this.refreshPinned();
+    return this.session;
   }
 
-  close(): void {
+  close(session: number): void {
+    if (session === this.session) {
+      this.closeChat();
+    }
+  }
+
+  private closeChat(): void {
     if (this.chatId) {
       this.core.td.send(o({ '@type': 'closeChat', 'chat_id': this.chatId })).catch(() => {});
     }

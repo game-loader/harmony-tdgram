@@ -1,5 +1,6 @@
 import { router, promptAction } from '@kit.ArkUI';
 import { ChatRow, ChatRowData } from '../components/ChatRow';
+import { ChatController, ChatView } from '../components/ChatView';
 import { Avatar } from '../components/Avatar';
 import { Account } from '../td/Account';
 import { Accounts } from '../td/Accounts';
@@ -11,6 +12,15 @@ import { formatTime } from '../common/Util';
 import { pickAction } from '../common/Menu';
 
 const MUTE_FOREVER = 0x7FFFFFFF;
+// Windows at least this wide (unfolded foldables, tablets) show the chat
+// list and the open chat side by side; narrower ones show one at a time.
+const SPLIT_MIN_WIDTH = 600;
+
+class OpenChat {
+  chatId: number = 0;
+  messageId: number = 0;
+  seq: number = 0; // recreates the chat view when the same chat is reopened at a message
+}
 
 class SearchHit {
   chatId: number = 0;
@@ -32,6 +42,10 @@ struct Main {
   @State myName: string = '';
   @State myPhoto: string = '';
   @State archiveCount: number = 0;
+  @State winWidth: number = 0;
+  @State open: OpenChat = new OpenChat();
+  private chatController: ChatController = new ChatController();
+  private openSeq: number = 0;
   private acc: Account = Accounts.get().active();
   private listener = (e: AccountEvent): void => this.onEvent(e);
   private managerListener = (): void => this.onAccountsChanged();
@@ -64,6 +78,7 @@ struct Main {
       this.acc.off(this.listener);
       this.acc = active;
       this.folderId = 0;
+      this.open = new OpenChat();
       this.attach();
     }
     if (this.acc.authStep !== 'ready' && this.acc.authStep !== 'loading') {
@@ -150,8 +165,39 @@ struct Main {
     }).catch(() => {});
   }
 
+  private wide(): boolean {
+    return this.winWidth >= SPLIT_MIN_WIDTH;
+  }
+
   openChat(chatId: number, msgId: number = 0): void {
-    router.pushUrl({ url: 'pages/Chat', params: { chatId: chatId, messageId: msgId } });
+    if (chatId === this.open.chatId && !msgId) {
+      return;
+    }
+    const o = new OpenChat();
+    o.chatId = chatId;
+    o.messageId = msgId;
+    o.seq = ++this.openSeq;
+    this.open = o;
+  }
+
+  closeChat(): void {
+    this.open = new OpenChat();
+    this.refresh();
+  }
+
+  onBackPress(): boolean {
+    if (!this.open.chatId) {
+      return false;
+    }
+    if (this.chatController.back()) {
+      return true;
+    }
+    // On a wide window the list stays visible, so back leaves the app as usual.
+    if (this.wide()) {
+      return false;
+    }
+    this.closeChat();
+    return true;
   }
   // Long-press menu of a chat row.
   chatMenu(row: ChatRowData): void {
@@ -219,6 +265,51 @@ struct Main {
   }
 
   build() {
+    Row() {
+      if (this.wide() || !this.open.chatId) {
+        this.ListPane()
+      }
+      if (this.open.chatId) {
+        Column() {
+          ForEach([this.open], (oc: OpenChat) => {
+            ChatView({
+              chatId: oc.chatId,
+              messageId: oc.messageId,
+              showBack: !this.wide(),
+              controller: this.chatController,
+              onBack: (): void => this.closeChat(),
+              onOpenChat: (id: number): void => this.openChat(id)
+            })
+          }, (oc: OpenChat) => `${oc.chatId}|${oc.seq}`)
+        }
+        .layoutWeight(1)
+        .height('100%')
+        .border({ width: { left: this.wide() ? 0.5 : 0 }, color: $r('sys.color.ohos_id_color_list_separator') })
+      } else if (this.wide()) {
+        Column() {
+          Text('选择一个聊天开始').fontSize(14).fontColor(Color.White)
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 }).borderRadius(14).backgroundColor('#66556677')
+        }
+        .layoutWeight(1)
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor($r('sys.color.ohos_id_color_sub_background'))
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .onAreaChange((_: Area, area: Area) => {
+      this.winWidth = Number(area.width);
+    })
+  }
+
+  // Width of the list when shown next to a chat.
+  private listWidth(): Length {
+    return this.wide() ? Math.min(400, Math.max(300, this.winWidth * 0.36)) : '100%';
+  }
+
+  @Builder
+  ListPane() {
     Column() {
       Row({ space: 10 }) {
         if (this.folderId === -1) {
@@ -293,6 +384,7 @@ struct Main {
                 .onClick(() => this.openChat(row.chat.id))
                 .gesture(LongPressGesture().onAction(() => this.chatMenu(row)))
             }
+            .backgroundColor(this.wide() && row.chat.id === this.open.chatId ? '#1F3A8DDE' : Color.Transparent)
           }, (row: ChatRowData) => row.key)
         }
         .layoutWeight(1)
@@ -300,7 +392,7 @@ struct Main {
         .onReachEnd(() => this.acc.chats.loadMore(this.folderId))
       }
     }
-    .width('100%')
+    .width(this.listWidth())
     .height('100%')
     .backgroundColor($r('sys.color.ohos_id_color_background'))
   }

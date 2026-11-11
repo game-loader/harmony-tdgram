@@ -18,6 +18,8 @@
         "startWindowIcon": "$media:icon",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
+        "orientation": "auto_rotation_restricted",
+        "supportWindowMode": ["fullscreen", "split", "floating"],
         "skills": [{ "entities": ["entity.system.home"], "actions": ["action.system.home"] }]
       }
     ],
