@@ -8,6 +8,7 @@ import { formatSize } from '../common/Util';
 import { pickAction } from '../common/Menu';
 import { Account } from '../td/Account';
 import { Accounts, Settings as AppSettings, SplitMode, ThemeMode } from '../td/Accounts';
+import { Filters } from '../td/Filters';
 import { o, TdError, TdObject } from '../td/TdClient';
 
 interface ItemP {
@@ -56,12 +57,40 @@ export struct SettingsPane {
   @State sessions: SessionRow[] = [];
   @State storage: string = '';
   @State paneW: number = 360;
+  @State filterText: string = '';
   private mgr: Accounts = Accounts.get();
+  private filterListener = (): void => this.refreshFilters();
+
+  aboutToDisappear(): void {
+    Filters.get().off(this.filterListener);
+  }
+
+  private refreshFilters(): void {
+    const c = Filters.get().config;
+    if (!c.enabled) {
+      this.filterText = '已关闭';
+      return;
+    }
+    const parts: string[] = [];
+    if (c.entries.length > 0) {
+      parts.push(`屏蔽 ${c.entries.length} 条`);
+    }
+    const rules = c.rules.length + (c.presets ? 1 : 0);
+    if (rules > 0) {
+      parts.push(`规则 ${rules} 条`);
+    }
+    if (Filters.get().aiReady()) {
+      parts.push('AI');
+    }
+    this.filterText = parts.length > 0 ? parts.join(' · ') : '未设置';
+  }
 
   aboutToAppear(): void {
     this.s = AppSettings.from(this.mgr.settings);
     this.refreshAccounts();
     this.loadStorage();
+    this.refreshFilters();
+    Filters.get().on(this.filterListener);
   }
 
   private refreshAccounts(): void {
@@ -260,6 +289,10 @@ export struct SettingsPane {
             this.Switch({ label: 'Markdown 格式', detail: '发送时把 **粗体**、__斜体__、`代码` 转成格式文字', on: this.s.markdown, fn: (v: boolean) => this.update((s: AppSettings) => { s.markdown = v; }) })
             this.Switch({ label: '自动播放 GIF 和贴纸', detail: '', on: this.s.autoplayGifs, fn: (v: boolean) => this.update((s: AppSettings) => { s.autoplayGifs = v; }) })
             this.Switch({ label: '自动下载小于 10 MB 的 GIF', detail: '', on: this.s.autoDownloadMedia, fn: (v: boolean) => this.update((s: AppSettings) => { s.autoDownloadMedia = v; }) })
+            this.Item({ label: '消息过滤（屏蔽广告）', value: this.filterText, color: $r('app.color.text_primary'), fn: () => {
+              this.nav.push('filters');
+              this.nav.commit();
+            } })
             this.Item({ label: '翻译目标语言', value: LANG_NAMES[Math.max(0, LANGS.indexOf(this.s.translateTo))], color: $r('app.color.text_primary'), fn: () => {
                 pickAction(LANG_NAMES).then((index: number) => {
                   this.update((s: AppSettings) => { s.translateTo = LANGS[index]; });
@@ -306,9 +339,9 @@ export struct SettingsPane {
           .backgroundColor($r('app.color.card'))
           .margin({ top: 16 })
 
-          Text('TdGram 0.4 · 基于 TDLib').fontSize(12).fontColor($r('app.color.text_secondary'))
+          Text('TdGram 0.5 · 基于 TDLib').fontSize(12).fontColor($r('app.color.text_secondary'))
             .margin({ top: 16, bottom: 24 })
-            .onClick(() => copyText(`TdGram 0.4, account ${this.mgr.active().myUserId}`))
+            .onClick(() => copyText(`TdGram 0.5, account ${this.mgr.active().myUserId}`))
         }
         .padding({ left: 12, right: 12 })
         .width(contentWidth(this.paneW))

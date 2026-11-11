@@ -4,12 +4,13 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
-const load = (name) => require(path.join(process.env.TDGRAM_OUT, name + '.cjs'));
-const L = load('Layout');
-const { Nav } = load('Nav');
-const D = load('ListDiff');
-const T = load('Tags');
-const A = load('AlbumLayout');
+const load = (name) => require(path.join(process.env.TDGRAM_OUT, name + '.js'));
+const L = load('common/Layout');
+const { Nav } = load('common/Nav');
+const D = load('common/ListDiff');
+const T = load('common/Tags');
+const A = load('components/AlbumLayout');
+const F = load('common/Filter');
 
 // ---- Layout ----
 
@@ -276,4 +277,77 @@ test('nav: a comment thread is its own route, distinct from its chat', () => {
   nav.pop();
   nav.pop();
   assert.equal(nav.top().chatId, 1);
+});
+
+// ---- Message filter ----
+
+const content = (text, extra = {}) => Object.assign(new F.FilterContent(), { text }, extra);
+
+test('filter: the same advertisement keeps its fingerprint when spacing, emoji and punctuation differ', () => {
+  const a = F.signature(content('🔥限时优惠！！ 点击加入 VIP 频道 👉 @abc_channel'));
+  const b = F.signature(content('限时优惠 点击加入vip频道 @abc_channel\n'));
+  assert.ok(a.startsWith('t:'));
+  assert.equal(a, b);
+  assert.notEqual(a, F.signature(content('限时优惠 点击加入vip频道 @xyz_channel')));
+  assert.equal(F.signature(content('ＶＩＰ　ｃｈａｎｎｅｌ')), F.signature(content('vip channel')));
+});
+
+test('filter: short texts fall back to buttons, then to the file, then to nothing', () => {
+  const withButtons = F.signature(content('👇', { buttons: ['立即加入'], urls: ['https://t.me/x'] }));
+  assert.ok(withButtons.startsWith('b:'));
+  assert.notEqual(withButtons, F.signature(content('👇', { buttons: ['立即加入'], urls: ['https://t.me/y'] })));
+  assert.equal(F.signature(content('', { fileUid: 'AQADabc' })), 'f:AQADabc');
+  assert.equal(F.signature(content('ok')), '');
+  assert.equal(F.hasText(withButtons), false);
+  assert.equal(F.hasText(F.signature(content('a long enough text'))), true);
+});
+
+test('filter: keyword rules are plain text or /regex/, both ignoring case', () => {
+  const hay = F.haystack(content('Join our VIP group', { buttons: ['Open'], urls: ['https://T.me/Promo'] }));
+  assert.equal(F.patternHits(F.compilePattern('vip GROUP'), hay), true);
+  assert.equal(F.patternHits(F.compilePattern('t.me/promo'), hay), true);
+  assert.equal(F.patternHits(F.compilePattern('/v[il]p\\s+group/'), hay), true);
+  assert.equal(F.patternHits(F.compilePattern('/^open$/m'), hay), true);
+  assert.equal(F.patternHits(F.compilePattern('casino'), hay), false);
+  assert.equal(F.compilePattern('/(/').valid, false);
+  assert.equal(F.compilePattern('   ').valid, false);
+  assert.equal(F.compilePattern('//').valid, false);
+});
+
+test('filter: built-in rules catch self-labelled advertising only', () => {
+  const hit = (t) => F.PRESETS.some((p) => F.patternHits(F.compilePattern(p), F.haystack(content(t))));
+  assert.equal(hit('新品上线 #广告'), true);
+  assert.equal(hit('Great deal #AD'), true);
+  assert.equal(hit('广告：某某 VPN 八折'), true);
+  assert.equal(hit('#advice for beginners'), false);
+  assert.equal(hit('这条消息在讨论广告行业'), false);
+});
+
+test('filter: classifier request and response', () => {
+  const items = [content('买一送一', { buttons: ['购买'], urls: ['https://a.b'] }), content('x'.repeat(3000)), content('hello there')];
+  const body = JSON.parse(F.jevRequest('', items));
+  assert.equal(body.model, 'jev-latest');
+  assert.deepEqual(body.state.m1, { message: '买一送一', buttons: ['购买'], links: ['https://a.b'] });
+  assert.equal(body.state.m2.message.length, 1201);
+  assert.deepEqual(Object.keys(body.questions), ['m1', 'm2', 'm3']);
+  assert.equal(body.questions.m3.type, 'noul');
+  assert.match(body.questions.m3.instructions, /message m3 /);
+  assert.equal(Object.keys(JSON.parse(F.jevRequest('jev-1.13.0', new Array(12).fill(content('some text')))).questions).length, 8);
+
+  const ok = F.jevResult(200, JSON.stringify({ model: 'jev-latest',
+    answers: { m1: { type: 'noul', noul: 0.93 }, m3: { type: 'noul', noul: 0 } } }), 3);
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.p, [0.93, -1, 0]);
+  const auth = F.jevResult(401, JSON.stringify({ error: { type: 'authentication_error', message: 'Missing or invalid API key.' } }), 1);
+  assert.equal(auth.ok, false);
+  assert.equal(auth.fatal, true);
+  assert.match(auth.error, /invalid API key/);
+  const busy = F.jevResult(429, '{"error":{"type":"rate_limit_error","message":"slow down"}}', 1);
+  assert.equal(busy.retry, true);
+  assert.equal(busy.fatal, false);
+  assert.equal(F.jevResult(0, 'timeout', 1).retry, true);
+  assert.equal(F.jevResult(200, '<html>', 1).fatal, true);
+  assert.equal(F.jevResult(200, '{"answers":{}}', 2).fatal, true);
+  assert.equal(F.jevResult(422, 'oops', 1).retry, false);
+  assert.equal(F.jevResult(422, 'oops', 1).fatal, false);
 });

@@ -25,8 +25,8 @@ export struct ForwardPane {
     const q = this.query.trim().toLowerCase();
     this.rows = this.acc.chats.sorted(0)
       .filter((c: ChatItem) => c.canSend && (!q || c.title.toLowerCase().includes(q)))
-      .map((c: ChatItem) => new ChatRowData(c, c.photoPath || this.acc.files.known(c.photoFileId), false,
-        this.acc.chats.isMuted(c), '', true, false, this.acc.chats.isForum(c)));
+      .map((c: ChatItem) => new ChatRowData(c, 'forward').apply(c.photoPath || this.acc.files.known(c.photoFileId),
+        false, this.acc.chats.isMuted(c), '', true, false, this.acc.chats.isForum(c)));
   }
 
   send(chatId: number): void {

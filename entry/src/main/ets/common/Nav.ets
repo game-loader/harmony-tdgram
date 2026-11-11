@@ -3,7 +3,8 @@
 // only changes how the same stack is laid out, so nothing is lost.
 // No UI imports: unit-tested by tools/test.mjs.
 
-export type RouteKind = 'chat' | 'profile' | 'settings' | 'contacts' | 'forward' | 'poll' | 'secretKey' | 'proxy';
+export type RouteKind = 'chat' | 'profile' | 'settings' | 'contacts' | 'forward' | 'poll' | 'secretKey' | 'proxy' |
+  'filters';
 
 // Lets the host forward the system back gesture into a route (to close a
 // panel or leave selection mode before the route itself is popped).

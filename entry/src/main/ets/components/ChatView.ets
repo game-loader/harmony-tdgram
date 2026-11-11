@@ -18,6 +18,7 @@ import { normalizeTag, snippetAround } from '../common/Tags';
 import { copyToCache, fileNameOf, formatDay, formatTime, lastSeen } from '../common/Util';
 import { Account, LinkTarget } from '../td/Account';
 import { Accounts } from '../td/Accounts';
+import { FilterConfig, Filters, reasonText } from '../td/Filters';
 import { AccountEvent } from '../td/Core';
 import { BotCmd, ChatItem, InlineButton, MsgItem, ReactionItem } from '../td/Models';
 import { formatTimer, summary } from '../td/Parse';
@@ -230,11 +231,18 @@ export struct ChatView {
   private keyboardMsgId: number = 0;
   private keyboardOneTime: boolean = false;
   private mentionIds: number[] = [];
+  private filters: Filters = Filters.get();
+  private filterListener = (): void => this.onFilters();
+  private revealed: Set<number> = new Set(); // filtered messages the user chose to look at
+  private orphanViewed: number[] = [];       // filtered messages with no row to be reported with
 
   aboutToAppear(): void {
     this.bubbleActions = this.makeActions();
     this.pendingJump = this.messageId;
     this.highlightId = this.messageId;
+    if (this.messageId) {
+      this.revealed.add(this.messageId);
+    }
     this.controller.back = (): boolean => this.handleBack();
     this.controller.jumpTo = (id: number): void => this.jumpTo(id);
     this.chat = this.acc.chat(this.chatId);
@@ -254,6 +262,7 @@ export struct ChatView {
     this.store.onChange = (e: StoreEvent): void => this.onStore(e);
     Accounts.get().clearNotifications(this.acc, this.chatId);
     this.acc.on(this.listener);
+    this.filters.on(this.filterListener);
     this.audioPlayer.on(this.audioListener);
     this.audioPlayer.onEnded = (key: string) => this.playNextVoice(key);
     this.refreshHeader();
@@ -272,6 +281,7 @@ export struct ChatView {
       this.store.setDraft(this.draft.trim(), this.replyTo ? this.replyTo.id : 0);
     }
     this.acc.off(this.listener);
+    this.filters.off(this.filterListener);
     this.audioPlayer.off(this.audioListener);
     this.acc.closeSession(this.store);
     clearTimeout(this.viewTimer);
@@ -315,6 +325,12 @@ export struct ChatView {
     } else if (e === 'typing' || e === 'chats' || e === 'connection') {
       this.refreshHeader();
     }
+  }
+
+  // A rule or a classifier answer changed what is filtered.
+  private onFilters(): void {
+    this.rebuild(false);
+    this.scheduleView();
   }
 
   private onStore(e: StoreEvent): void {
@@ -436,6 +452,14 @@ export struct ChatView {
       return it;
     };
     const out: BubbleData[] = [];
+    const filters = this.filters;
+    const hideMode = filters.config.mode === 'hide';
+    let run: BubbleData | null = null; // the line standing for consecutive filtered messages
+    let carryViewed: number[] = [];    // hide mode: filtered messages waiting for a row to be reported with
+    let carryDivider = false;
+    let prevShown: MsgItem | undefined = undefined;
+    let afterBreak = false;
+    let hiddenTotal = 0;
     let i = 0;
     while (i < msgs.length) {
       // Consecutive photos and videos sharing media_album_id become one bubble.
@@ -446,14 +470,45 @@ export struct ChatView {
         }
       }
       const group = msgs.slice(i, j);
-      const prev = i > 0 ? msgs[i - 1] : undefined;
+      i = j;
       const captioned = group.find((x: MsgItem) => x.text !== '');
       const m = captioned ?? group[0];
+      const hasUnread = firstUnread !== 0 && group.some((x: MsgItem) => x.id === firstUnread);
+      const reason = filters.check(m, this.chat);
+      if (reason && !group.some((x: MsgItem) => this.revealed.has(x.id))) {
+        hiddenTotal += group.length;
+        if (hideMode) {
+          group.forEach((x: MsgItem) => carryViewed.push(x.id));
+          carryDivider = carryDivider || hasUnread;
+          continue;
+        }
+        if (!run) {
+          run = new BubbleData(m);
+          run.filtered = reason;
+          if (!prevShown || formatDay(prevShown.date) !== formatDay(m.date)) {
+            run.dayLabel = formatDay(m.date);
+          }
+          out.push(run);
+        } else if (run.filtered !== reason) {
+          run.filtered = 'mixed';
+        }
+        const line = run;
+        group.forEach((x: MsgItem) => line.hidden.push(x));
+        line.unreadDivider = line.unreadDivider || hasUnread;
+        prevShown = m;
+        afterBreak = true;
+        continue;
+      }
+      run = null;
       const d = new BubbleData(m);
+      d.filtered = reason;
+      d.viewAlso = carryViewed;
+      carryViewed = [];
       if (group.length > 1) {
         d.album = group.map(resolve);
       }
-      d.showSender = isGroup && (!prev || prev.senderId !== m.senderId || prev.kind === 'service');
+      d.showSender = isGroup && (!prevShown || afterBreak || prevShown.senderId !== m.senderId ||
+        prevShown.kind === 'service');
       d.senderName = this.acc.chats.nameOf(m.senderId, m.senderIsChat);
       const self = resolve(m);
       d.filePath = self.filePath;
@@ -472,7 +527,8 @@ export struct ChatView {
       d.translated = this.translations.get(m.id) ?? '';
       d.selected = group.some((x: MsgItem) => this.selected.includes(x.id));
       d.highlight = this.highlightId !== 0 && group.some((x: MsgItem) => x.id === this.highlightId);
-      d.unreadDivider = firstUnread !== 0 && group.some((x: MsgItem) => x.id === firstUnread);
+      d.unreadDivider = hasUnread || carryDivider;
+      carryDivider = false;
       d.autoplay = settings.autoplayGifs;
       d.canThread = !this.threadId && !this.topicId && m.hasThread && !m.pending && !m.failed &&
         (m.isChannelPost || m.replyCount > 0);
@@ -480,21 +536,39 @@ export struct ChatView {
       if (m.kind === 'location' && !(this.chat && this.chat.type === 'secret')) {
         d.mapPath = files.path(this.acc.mapFile(m.lat, m.lon, m.chatId), 4);
       }
-      if (!prev || formatDay(prev.date) !== formatDay(m.date)) {
+      if (!prevShown || formatDay(prevShown.date) !== formatDay(m.date)) {
         d.dayLabel = formatDay(m.date);
       }
-      out.push(d.seal());
-      i = j;
+      prevShown = m;
+      afterBreak = false;
+      out.push(d);
     }
+    // Filtered messages at the very end are reported with the last row, so
+    // the chat does not stay unread because of messages that are not shown.
+    if (out.length > 0 && carryViewed.length > 0) {
+      const tail = out[out.length - 1];
+      tail.viewAlso = tail.viewAlso.concat(carryViewed);
+      carryViewed = [];
+    }
+    this.orphanViewed = carryViewed;
+    out.forEach((b: BubbleData) => b.seal());
     this.source.update(out);
     this.count = messagesChanged || this.count >= 0 ? out.length : this.count;
     if (messagesChanged) {
       // An empty chat with a bot starts with the "Start" button.
       const u = this.chat && this.chat.type === 'private' ? this.acc.user(this.chat.userId) : undefined;
-      this.botStart = u !== undefined && u.isBot && (this.startParam !== '' || (out.length === 0 && this.store.olderDone));
+      this.botStart = u !== undefined && u.isBot && (this.startParam !== '' || (msgs.length === 0 && this.store.olderDone));
     }
     const lastId = msgs.length > 0 ? msgs[msgs.length - 1].id : 0;
     this.lastShownId = lastId;
+    // Hiding messages may leave too little to scroll, and so nothing that
+    // would ask for older history. Bounded, in case a whole chat is filtered.
+    if (hiddenTotal > 0 && out.length < 12 && msgs.length < 300 && !this.store.olderDone) {
+      this.store.loadOlder();
+    }
+    if (messagesChanged && out.length === 0 && this.orphanViewed.length > 0) {
+      this.scheduleView();
+    }
     if (!messagesChanged || out.length === 0) {
       return;
     }
@@ -534,13 +608,13 @@ export struct ChatView {
     }
     this.viewTimer = setTimeout(() => {
       this.viewTimer = -1;
-      if (!this.active || !Accounts.get().appInForeground || this.visEnd < 0) {
+      if (!this.active || !Accounts.get().appInForeground) {
         return;
       }
       const rows = this.source.items();
-      const ids: number[] = [];
+      const ids: number[] = rows.length === 0 ? this.orphanViewed.slice() : [];
       for (let i = Math.max(0, this.visStart); i <= this.visEnd && i < rows.length; i++) {
-        for (const id of rows[i].ids()) {
+        for (const id of rows[i].viewIds()) {
           ids.push(id);
         }
       }
@@ -558,9 +632,11 @@ export struct ChatView {
 
   jumpTo(id: number): void {
     this.highlightId = id;
+    // A filtered message that is asked for by name is shown.
+    this.revealed.add(id);
+    this.rebuild(false);
     const idx = this.source.items().findIndex((b: BubbleData) => b.ids().includes(id));
     if (idx >= 0) {
-      this.rebuild(false);
       this.scroller.scrollToIndex(idx, true, ScrollAlign.CENTER);
       this.fadeHighlight();
       return;
@@ -1064,6 +1140,9 @@ export struct ChatView {
     // Pager over every visual message of the loaded window, albums flattened.
     const visual: AlbumItem[] = [];
     for (const b of this.source.items()) {
+      if (b.hidden.length > 0) {
+        continue;
+      }
       if (b.album.length > 0) {
         b.album.forEach((a: AlbumItem) => visual.push(a));
       } else if (b.msg.kind === 'photo' || b.msg.kind === 'video' || b.msg.kind === 'animation') {
@@ -1122,7 +1201,7 @@ export struct ChatView {
     }
     for (let i = idx + 1; i < rows.length; i++) {
       const b = rows[i];
-      if (b.msg.kind === 'voice' && b.filePath) {
+      if (b.hidden.length === 0 && b.msg.kind === 'voice' && b.filePath) {
         this.playAudio(b);
         return;
       }
@@ -1491,6 +1570,14 @@ export struct ChatView {
         this.selected = d.ids();
         this.rebuild(false);
       });
+      if (d.filtered) {
+        add('不再过滤这类消息', () => {
+          this.filters.unblock(m);
+          this.toast('已取消过滤');
+        });
+      } else if (!m.outgoing) {
+        add('屏蔽相同内容的消息', () => this.blockMenu([m]));
+      }
       add('详细信息', () => this.showInfo(m));
       if (p['can_be_deleted_only_for_self'] || p['can_be_deleted_for_all_users']) {
         add('删除', () => this.confirmDelete(d.ids(), p['can_be_deleted_for_all_users'] as boolean), true);
@@ -1521,6 +1608,61 @@ export struct ChatView {
     }).catch((e: TdError) => this.toast(`翻译失败：${e.message}`));
   }
 
+  // ---- Message filter ----
+
+  private blockMenu(list: MsgItem[]): void {
+    const menu = new MenuState();
+    menu.title = '以后遇到内容相同的消息就过滤掉';
+    menu.items.push(new PanelItem('仅在这个聊天', () => this.block(list, false)));
+    menu.items.push(new PanelItem('在所有聊天', () => this.block(list, true)));
+    menu.items.push(new PanelItem('过滤设置…', () => this.openFilters()));
+    this.showMenu(menu);
+  }
+
+  private block(list: MsgItem[], everywhere: boolean): void {
+    list.forEach((m: MsgItem) => this.revealed.delete(m.id));
+    const n = this.filters.block(list, this.chat, everywhere);
+    if (n === 0) {
+      this.toast('这条消息没有可以用来识别的内容（文字、按钮或文件）');
+    } else {
+      this.toast(n === list.length ? '已屏蔽，内容相同的消息不再显示' : `已屏蔽 ${n} 条，其余没有可识别的内容`);
+    }
+  }
+
+  private blockSelected(): void {
+    const list = this.source.items().filter((b: BubbleData) => b.selected && !b.msg.outgoing)
+      .map((b: BubbleData) => b.msg);
+    this.selected = [];
+    this.rebuild(false);
+    if (list.length === 0) {
+      this.toast('自己发送的消息不会被过滤');
+      return;
+    }
+    this.blockMenu(list);
+  }
+
+  private openFilters(): void {
+    this.nav.push('filters');
+    this.nav.commit();
+  }
+
+  // Shows the messages behind a "filtered" line, or folds them again.
+  private reveal(b: BubbleData, show: boolean): void {
+    for (const id of b.ids()) {
+      if (show) {
+        this.revealed.add(id);
+      } else {
+        this.revealed.delete(id);
+      }
+    }
+    this.rebuild(false);
+  }
+
+  private filteredLabel(b: BubbleData): string {
+    const why = reasonText(b.filtered);
+    return `已过滤 ${b.hidden.length} 条消息${why ? ' · ' + why : ''}`;
+  }
+
   private showInfo(m: MsgItem): void {
     const lines = [`消息 ID：${m.id}`, `发送时间：${new Date(m.date * 1000).toLocaleString()}`];
     if (m.editDate) {
@@ -1534,6 +1676,10 @@ export struct ChatView {
     }
     if (m.fileSize) {
       lines.push(`文件大小：${(m.fileSize / 1024).toFixed(1)} KB`);
+    }
+    const ad = this.filters.probability(m);
+    if (ad >= 0) {
+      lines.push(`AI 判断为广告的概率：${Math.round(ad * 100)}%`);
     }
     promptAction.showDialog({ title: '消息信息', message: lines.join('\n'),
       buttons: [{ text: '复制 ID', color: '#888888' }, { text: '关闭', color: '#3A8DDE' }] })
@@ -1594,6 +1740,17 @@ export struct ChatView {
       this.acc.mute(c, this.muted ? 0 : MUTE_FOREVER).catch(() => {});
     });
     add('自动删除消息', () => this.autoDeleteMenu(c));
+    add('消息过滤…', () => this.openFilters());
+    const cfg = this.filters.config;
+    if (this.filters.aiReady() && c.type !== 'secret' && !(cfg.aiChannels && c.type === 'channel')) {
+      const on = cfg.aiChats.includes(c.id);
+      add(`${on ? '✓ ' : ''}用 AI 识别这个聊天里的广告`, () => {
+        this.filters.update((f: FilterConfig) => {
+          f.aiChats = on ? f.aiChats.filter((id: number) => id !== c.id) : f.aiChats.concat([c.id]);
+        });
+        this.toast(on ? '已关闭' : '已开启：这个聊天收到的消息会发给 AI 接口判断');
+      });
+    }
     if (c.type === 'private' && c.userId !== this.acc.myUserId) {
       add('开始私密聊天', () => {
         this.acc.startSecretChat(c.userId).then((id: number) => {
@@ -1685,6 +1842,7 @@ export struct ChatView {
           this.rebuild(false);
         })
         Button('转发', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => this.forward(this.selected, false))
+        Button('屏蔽', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => this.blockSelected())
         Button('删除', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontColor($r('app.color.danger'))
           .onClick(() => this.confirmDelete(this.selected, true))
       }
@@ -2080,12 +2238,27 @@ export struct ChatView {
                   .width('100%').padding({ top: 4, bottom: 4 }).margin({ top: 4, bottom: 4 })
                   .backgroundColor($r('app.color.accent_soft'))
               }
-              MessageBubble({
-                data: b, actions: this.bubbleActions,
-                bubbleMax: bubbleMaxWidth(this.paneW), mediaW: mediaWidth(this.paneW),
-                mediaH: mediaMaxHeight(this.paneH), stickerSide: stickerSide(this.paneW)
-              })
-                .translate({ x: this.swipeId === b.id ? this.swipeX : 0 })
+              if (b.hidden.length > 0) {
+                // Filtered messages fold into one line; a tap shows them.
+                Text(this.filteredLabel(b)).fontSize(12).fontColor($r('app.color.text_secondary'))
+                  .padding({ left: 12, right: 12, top: 4, bottom: 4 }).borderRadius(11)
+                  .backgroundColor($r('app.color.chip')).margin({ top: 3, bottom: 3 })
+                  .onClick(() => this.reveal(b, true))
+              } else {
+                if (b.filtered) {
+                  Text(`已过滤的消息${reasonText(b.filtered) ? ' · ' + reasonText(b.filtered) : ''} · 点击收起`)
+                    .fontSize(11).fontColor($r('app.color.text_secondary')).width('100%')
+                    .padding({ left: 18, right: 18, top: 2 })
+                    .textAlign(b.msg.outgoing ? TextAlign.End : TextAlign.Start)
+                    .onClick(() => this.reveal(b, false))
+                }
+                MessageBubble({
+                  data: b, actions: this.bubbleActions,
+                  bubbleMax: bubbleMaxWidth(this.paneW), mediaW: mediaWidth(this.paneW),
+                  mediaH: mediaMaxHeight(this.paneH), stickerSide: stickerSide(this.paneW)
+                })
+                  .translate({ x: this.swipeId === b.id ? this.swipeX : 0 })
+              }
             }
             .width('100%')
             // Drag a message to the left to reply to it.
@@ -2182,7 +2355,7 @@ export struct ChatView {
 
   private canSwipeReply(b: BubbleData): boolean {
     return this.canSend && !this.joinable && this.selected.length === 0 && b.msg.kind !== 'service' &&
-      !b.msg.pending && !b.msg.failed;
+      b.hidden.length === 0 && !b.msg.pending && !b.msg.failed;
   }
 
   private endSwipe(b: BubbleData, commit: boolean): void {

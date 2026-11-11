@@ -21,6 +21,7 @@ export class ChatItem {
   lastText: string = '';
   lastDate: number = 0;
   lastMsgId: number = 0;
+  shownMsgId: number = 0;    // message the preview text belongs to
   lastOutgoing: boolean = false;
   lastReadOutboxId: number = 0;
   lastReadInboxId: number = 0;
@@ -35,6 +36,10 @@ export class ChatItem {
   autoDeleteTime: number = 0;
   canSend: boolean = true;
   replyMarkupId: number = 0; // message carrying the bot's reply keyboard, 0 when none
+  // The last message itself, and the newest one that was not filtered: the
+  // list keeps showing that one while only filtered messages follow it.
+  last: MsgItem | null = null;
+  kept: MsgItem | null = null;
 }
 
 // A command a bot offers, listed when the user types '/'.
@@ -132,6 +137,7 @@ export class MsgItem {
   filePath: string = '';
   fileSize: number = 0;
   fileName: string = '';
+  fileUid: string = ''; // remote unique id: the same for every copy of the file
   mime: string = '';
   thumbFileId: number = 0;
   thumbPath: string = '';
@@ -183,4 +189,11 @@ export class MsgItem {
   canRetry: boolean = false; // a failed message that can be sent again
   // Bumped on every in-place change so ForEach keys re-render the row.
   version: number = 0;
+  // Message filter cache, owned by Filters: fingerprint and verdict, each
+  // with the state they were computed for.
+  filterSig: string = '';
+  filterSigVersion: number = -1;
+  filterReason: string = '';
+  filterRev: number = -1;
+  filterVersion: number = -1;
 }

@@ -275,7 +275,7 @@ export class Account implements AccountCore {
       'system_language_code': 'zh',
       'device_model': deviceInfo.marketName || deviceInfo.productModel || 'HarmonyOS',
       'system_version': deviceInfo.displayVersion || 'HarmonyOS',
-      'application_version': '0.4.0'
+      'application_version': '0.5.0'
     })).catch((e: Error) => {
       this.authHint = `初始化失败：${e.message}`;
       this.emit('auth');

@@ -1,8 +1,9 @@
 import { display, promptAction, router } from '@kit.ArkUI';
-import { ChatRow, ChatRowData } from '../components/ChatRow';
+import { ChatRow, ChatRowActions, ChatRowData } from '../components/ChatRow';
 import { ChatPane } from '../components/ChatPane';
 import { Avatar } from '../components/Avatar';
 import { ContactsPane } from '../panes/ContactsPane';
+import { FiltersPane } from '../panes/FiltersPane';
 import { ForwardPane } from '../panes/ForwardPane';
 import { PollPane } from '../panes/PollPane';
 import { ProfilePane } from '../panes/ProfilePane';
@@ -63,6 +64,10 @@ struct Main {
   private dragFrom: number = 0;
   private listScroller: ListScroller = new ListScroller();
   private leaving: boolean = false;
+  // Rows by chat id. They are kept across refreshes so a change only touches
+  // the fields that differ; see ChatRowData.
+  private rowCache: Map<number, ChatRowData> = new Map();
+  private rowScope: string = '';
 
   aboutToAppear(): void {
     this.nav.onChange = (): void => {
@@ -165,13 +170,36 @@ struct Main {
 
   refresh(): void {
     const chats = this.acc.chats;
-    this.rows = chats.sorted(this.folderId).map((c: ChatItem) => {
+    // Pinning and the swipe actions depend on the folder, so rows are per folder.
+    const scope = `${this.acc.slot}:${this.folderId}`;
+    if (scope !== this.rowScope) {
+      this.rowScope = scope;
+      this.rowCache.clear();
+    }
+    const seen = new Set<number>();
+    const next = chats.sorted(this.folderId).map((c: ChatItem) => {
       const user = c.userId ? chats.users.get(c.userId) : undefined;
       const online = user !== undefined && user.status !== null && user.status['@type'] === 'userStatusOnline' &&
         !user.isBot && c.userId !== this.acc.myUserId;
-      return new ChatRowData(c, c.photoPath || this.acc.files.path(c.photoFileId), chats.isPinned(c, this.folderId),
-        chats.isMuted(c), chats.typingText(c.id), c.lastReadOutboxId >= c.lastMsgId, online, chats.isForum(c));
+      let row = this.rowCache.get(c.id);
+      if (!row) {
+        row = new ChatRowData(c, scope);
+        this.rowCache.set(c.id, row);
+      } else if (row.chat !== c) {
+        row.chat = c;
+      }
+      seen.add(c.id);
+      return row.apply(c.photoPath || this.acc.files.path(c.photoFileId), chats.isPinned(c, this.folderId),
+        chats.isMuted(c), chats.typingText(c.id), c.lastReadOutboxId >= c.shownMsgId, online, chats.isForum(c));
     });
+    if (seen.size !== this.rowCache.size) {
+      Array.from(this.rowCache.keys()).filter((id: number) => !seen.has(id))
+        .forEach((id: number) => this.rowCache.delete(id));
+    }
+    // The list itself is only touched when chats were added, removed or moved.
+    if (next.length !== this.rows.length || next.some((r: ChatRowData, i: number) => r.key !== this.rows[i].key)) {
+      this.rows = next;
+    }
     if (this.folderId === 0) {
       this.archiveCount = chats.sorted(-1).length;
     }
@@ -282,18 +310,12 @@ struct Main {
   // Revealed by swiping a chat row to the left.
   @Builder
   RowActions(row: ChatRowData) {
-    Row() {
-      Text(row.chat.unread > 0 || row.chat.markedUnread ? '已读' : '未读').fontSize(14).fontColor(Color.White)
-        .width(64).height('100%').textAlign(TextAlign.Center).backgroundColor('#4A9BEA')
-        .onClick(() => this.quick(this.acc.markRead(row.chat, row.chat.unread > 0 || row.chat.markedUnread)))
-      Text(row.pinned ? '取消置顶' : '置顶').fontSize(14).fontColor(Color.White)
-        .width(64).height('100%').textAlign(TextAlign.Center).backgroundColor('#F0A030')
-        .onClick(() => this.quick(this.acc.togglePin(row.chat, this.folderId, !row.pinned)))
-      Text(this.folderId === -1 ? '移出归档' : '归档').fontSize(14).fontColor(Color.White)
-        .width(64).height('100%').textAlign(TextAlign.Center).backgroundColor('#8E99A4')
-        .onClick(() => this.quick(this.acc.archive(row.chat, this.folderId !== -1)))
-    }
-    .height('100%')
+    ChatRowActions({
+      row: row, archived: this.folderId === -1,
+      onRead: (r: ChatRowData): void => this.quick(this.acc.markRead(r.chat, r.unread > 0 || r.markedUnread)),
+      onPin: (r: ChatRowData): void => this.quick(this.acc.togglePin(r.chat, this.folderId, !r.pinned)),
+      onArchive: (r: ChatRowData): void => this.quick(this.acc.archive(r.chat, this.folderId !== -1))
+    })
   }
 
   // Long-press menu of a chat row.
@@ -394,6 +416,8 @@ struct Main {
       PollPane({ nav: this.nav, route: r, showBack: this.backFor(index) })
     } else if (r.kind === 'secretKey') {
       SecretKeyPane({ nav: this.nav, route: r, showBack: this.backFor(index) })
+    } else if (r.kind === 'filters') {
+      FiltersPane({ nav: this.nav, showBack: this.backFor(index) })
     } else {
       ProxyPane({ nav: this.nav, showBack: this.backFor(index) })
     }
@@ -569,11 +593,11 @@ struct Main {
           ForEach(this.rows, (row: ChatRowData) => {
             ListItem() {
               ChatRow({ row: row })
-                .onClick(() => this.nav.openRootChat(row.chat.id))
+                .onClick(() => this.nav.openRootChat(row.id))
                 .gesture(LongPressGesture().onAction(() => this.chatMenu(row)))
             }
             .backgroundColor(this.split() && this.stack.length > 0 && this.stack[0].kind === 'chat' &&
-              !this.stack[0].threadId && this.stack[0].chatId === row.chat.id ? $r('app.color.accent_soft') :
+              !this.stack[0].threadId && this.stack[0].chatId === row.id ? $r('app.color.accent_soft') :
               Color.Transparent)
             .swipeAction({ end: { builder: (): void => { this.RowActions(row) } } })
           }, (row: ChatRowData) => row.key)

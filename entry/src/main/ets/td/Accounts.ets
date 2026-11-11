@@ -2,7 +2,9 @@ import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { notificationManager } from '@kit.NotificationKit';
 import { wantAgent, WantAgent } from '@kit.AbilityKit';
+import { connection } from '@kit.NetworkKit';
 import { Account } from './Account';
+import { Filters } from './Filters';
 import { ChatItem, MsgItem } from './Models';
 import { summary } from './Parse';
 import { ProxyConfig } from './Proxy';
@@ -90,6 +92,29 @@ export class Accounts {
       }
     }
     this.applyTheme();
+    const filters = Filters.get();
+    filters.init(context.filesDir);
+    // The classifier is reached through the app's proxy when that is an HTTP
+    // proxy (the only kind the system's HTTP client can be given).
+    filters.httpProxy = (): connection.HttpProxy | null => {
+      const s = this.settings;
+      const p = s.proxyIndex >= 0 && s.proxyIndex < s.proxies.length ? s.proxies[s.proxyIndex] : null;
+      if (!p || p.kind !== 'http') {
+        return null;
+      }
+      const proxy: connection.HttpProxy = { host: p.server, port: p.port, exclusionList: [] };
+      if (p.user) {
+        proxy.username = p.user;
+        proxy.password = p.pass;
+      }
+      return proxy;
+    };
+    // Chat list previews follow the filters.
+    filters.on((): void => {
+      for (const a of this.all()) {
+        a.chats.refilter();
+      }
+    });
     for (const slot of slots) {
       this.create(slot);
     }
@@ -297,6 +322,15 @@ export class Accounts {
     if (this.appInForeground && a.slot === this.activeSlot && a.isViewing(chat.id)) {
       return;
     }
+    // Filtered messages stay silent; a classifier answer is waited for briefly.
+    Filters.get().settle(msg, chat).then((reason: string) => {
+      if (!reason) {
+        this.publish(a, chat, msg);
+      }
+    });
+  }
+
+  private publish(a: Account, chat: ChatItem, msg: MsgItem): void {
     let text = this.settings.notifyPreview ? summary(msg) : '新消息';
     if (chat.type === 'secret') {
       text = '新的私密消息';

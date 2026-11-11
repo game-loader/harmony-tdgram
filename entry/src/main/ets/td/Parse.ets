@@ -25,6 +25,8 @@ function setFile(item: MsgItem, file: TdObject | undefined): void {
     return;
   }
   item.fileId = file['id'] as number;
+  const remote = file['remote'] as TdObject | undefined;
+  item.fileUid = remote ? ((remote['unique_id'] as string) ?? '') : '';
   item.filePath = localPath(file);
   item.fileSize = (file['size'] as number) || (file['expected_size'] as number) || 0;
 }
@@ -56,6 +58,7 @@ export function fillContent(item: MsgItem, content: TdObject, nameOf: NameOf): v
   item.text = '';
   item.entities = [];
   item.fileId = 0;
+  item.fileUid = '';
   item.thumbFileId = 0;
   item.thumbPath = '';
   item.minithumb = '';

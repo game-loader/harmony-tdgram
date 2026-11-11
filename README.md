@@ -14,6 +14,8 @@ _个人项目，与 Telegram 和华为无关。_
 
 **搜索与标签**：聊天内搜索以结果面板显示，点击结果跳转并高亮，面板保持打开可连续跳转。点击消息里的 `#标签` 直接列出本聊天所有带该标签的消息。
 
+**消息过滤**（屏蔽广告）：长按一条消息选“屏蔽相同内容的消息”，或多选后点“屏蔽”，之后内容相同的消息（忽略空格、标点、表情的差别）不再显示，可限定在当前聊天或对所有聊天生效；关键词和 `/正则/` 规则，外加一组识别 `#广告` 之类标签的内置规则；可选接入 AI 判断接口（默认 [Jev](https://jevmodel.org/) 的 SystemOne 格式，自己填地址和 Key），按聊天开启或对所有频道开启，相同内容只问一次。被过滤的消息折叠成一行（点击可看）或完全隐藏，聊天列表预览和通知同样跳过它们。过滤只在本机生效，不删除消息。
+
 **媒体**：全屏查看器（左右切换、双指缩放、保存到图库）、语音按住录制（上滑取消，Opus 编码并生成波形）、语音播放（迷你播放条、倍速、连续播放下一条、转文字）、多张图片和视频按相册发送、拍照和录像、阅后即焚图片、发送位置和投票、贴纸和 GIF 面板。资料页可查看聊天里的媒体、文件、链接、语音和群成员。
 
 **折叠屏与大屏**（按 Huawei Pura X Max 调整）：展开后左边聊天列表、右边内容，资料、设置、联系人、转发等页面也在右栏打开；合上后同一组页面变成单栏，滚动位置、草稿和已打开的页面都保留。分隔条可以拖动（靠近折痕时吸附，双击恢复默认），气泡、图片、贴纸面板和附件菜单按栏宽调整，键盘弹出时压缩布局而不是把标题栏顶出屏幕。设置里可以把分栏改成自动、始终或关闭。
@@ -32,11 +34,11 @@ _个人项目，与 Telegram 和华为无关。_
 
 - `entry/src/main/cpp/napi_init.cpp`：TDLib JSON 接口的 NAPI 桥接，后台线程批量接收；二维码编码（[nayuki/QR-Code-generator](https://github.com/nayuki/QR-Code-generator)，MIT）
 - `entry/src/main/cpp/media.cpp`：Opus 语音解码为 WAV、录音编码为 Ogg/Opus 并生成 Telegram 波形、TGS 贴纸解压
-- `entry/src/main/ets/td/`：`TdClient`（多客户端路由）、`Account`（单账号）、`Accounts`（多账号与设置）、`ChatStore`、`MessageStore`（每个打开的聊天一个实例）、`FileStore`、`Parse`
+- `entry/src/main/ets/td/`：`TdClient`（多客户端路由）、`Account`（单账号）、`Accounts`（多账号与设置）、`ChatStore`、`MessageStore`（每个打开的聊天一个实例）、`FileStore`、`Parse`、`Filters`（消息过滤：屏蔽列表、规则、AI 判断队列）
 - `entry/src/main/ets/pages/`：登录、主页（聊天列表 + 右栏路由栈）、媒体查看器
-- `entry/src/main/ets/panes/`：在右栏或全屏显示的页面：资料、设置、联系人、转发、投票、加密密钥、代理
-- `entry/src/main/ets/common/`：`Layout`（分栏和尺寸规则）、`Nav`（路由栈）、`ListDiff`、`Tags`，都不依赖界面，有单元测试
-- `tools/`：`build.sh`（测试 + 请求校验 + 构建）、`test.mjs`（单元测试）、`check-td.mjs`（对照 `td_api.tl` 检查代码里每个 TDLib 请求的类型名和字段名）
+- `entry/src/main/ets/panes/`：在右栏或全屏显示的页面：资料、设置、联系人、转发、投票、加密密钥、代理、消息过滤
+- `entry/src/main/ets/common/`：`Layout`（分栏和尺寸规则）、`Nav`（路由栈）、`ListDiff`、`Tags`、`Filter`（内容指纹、规则、AI 请求格式），都不依赖界面，有单元测试
+- `tools/`：`build.sh`（测试 + 请求校验 + 构建）、`test.mjs`（单元测试）、`check-td.mjs`（对照 `td_api.tl` 检查代码里每个 TDLib 请求的类型名和字段名）、`jev-try.mjs`（用应用同样的请求格式把样例消息发给 AI 接口，看返回的概率，方便选阈值）
 - TGS 动画贴纸用 `@ohos/lottie`（MIT，`third_party/lottie-2.0.38.har`）
 
 ## 构建
@@ -76,6 +78,7 @@ _个人项目，与 Telegram 和华为无关。_
 - 没有推送通知：通知只在 App 运行时发出，退到后台被系统冻结后收不到
 - 不支持语音和视频通话、直播、Stories
 - 自定义表情（Premium）显示为普通文字
+- AI 过滤会把所选聊天的消息文字发给你填写的第三方接口；Key 明文保存在应用私有目录
 - 只有 arm64-v8a
 
 ## 许可

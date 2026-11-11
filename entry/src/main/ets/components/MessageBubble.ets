@@ -40,6 +40,12 @@ export class BubbleData {
   unreadDivider: boolean = false; // "unread messages" line above this bubble
   mapPath: string = '';   // map image of a location message
   canThread: boolean = false; // show the comments / replies row
+  // Message filter. A row with `hidden` stands for the filtered messages in
+  // it and draws one line instead of a bubble; `filtered` is the reason, also
+  // set on a filtered message the user chose to look at.
+  hidden: MsgItem[] = [];
+  filtered: string = '';
+  viewAlso: number[] = []; // filtered messages hidden next to this row, reported as seen with it
   // Albums: every item, in order. `msg` is the item carrying the caption.
   album: AlbumItem[] = [];
   key: string = '';
@@ -52,14 +58,23 @@ export class BubbleData {
     this.id = this.msg.id;
     this.key = [this.msg.id, this.msg.version, this.filePath, this.thumbPath, this.progress, this.replyText,
       this.read, this.playing, Math.round(this.playPos * 100), this.translated, this.selected, this.showSender,
-      this.senderName, this.dayLabel, this.highlight, this.unreadDivider, this.mapPath, this.canThread].join('|') +
+      this.senderName, this.dayLabel, this.highlight, this.unreadDivider, this.mapPath, this.canThread, this.filtered,
+      this.hidden.map((m: MsgItem) => m.id).join(',')].join('|') +
     this.album.map((a: AlbumItem) => `#${a.msg.id}.${a.msg.version}.${a.filePath}.${a.thumbPath}.${a.progress}`).join('');
     return this;
   }
 
   // Message ids this bubble stands for.
   ids(): number[] {
+    if (this.hidden.length > 0) {
+      return this.hidden.map((m: MsgItem) => m.id);
+    }
     return this.album.length > 0 ? this.album.map((a: AlbumItem) => a.msg.id) : [this.msg.id];
+  }
+
+  // Messages counted as seen once this row is on screen.
+  viewIds(): number[] {
+    return this.viewAlso.length > 0 ? this.ids().concat(this.viewAlso) : this.ids();
   }
 }
 

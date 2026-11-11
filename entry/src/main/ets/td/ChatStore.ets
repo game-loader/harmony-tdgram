@@ -3,6 +3,7 @@ import { o, TdObject } from './TdClient';
 import { ChatItem, ChatPos, SecretChatItem, TopicItem, UserItem } from './Models';
 import { fillMessage, localPath, summary } from './Parse';
 import { MsgItem } from './Models';
+import { Filters } from './Filters';
 
 export class FolderItem {
   id: number = 0; // 0 = main list, -1 = archive
@@ -34,6 +35,8 @@ function folderKey(folderId: number): string {
 }
 
 // Chats, users, secret chats and folders for one account.
+const KEPT_SEARCH = 12; // messages looked through for a preview when the last one is filtered
+
 export class ChatStore {
   private core: AccountCore;
   chats: Map<number, ChatItem> = new Map();
@@ -54,6 +57,7 @@ export class ChatStore {
   onUnread: () => void = () => {};
   // Called for each incoming message, for notifications.
   onIncoming: (chat: ChatItem, msg: MsgItem) => void = () => {};
+  private keptAsked: Map<number, string> = new Map(); // chat id -> what the search last ran for
 
   constructor(core: AccountCore) {
     this.core = core;
@@ -197,8 +201,11 @@ export class ChatStore {
 
   private setLast(c: ChatItem, msg: TdObject | undefined): void {
     if (!msg) {
+      c.last = null;
+      c.kept = null;
       c.lastText = '';
       c.lastMsgId = 0;
+      c.shownMsgId = 0;
       return;
     }
     const m = new MsgItem();
@@ -210,6 +217,46 @@ export class ChatStore {
       m.kind = 'unsupported';
       m.text = '消息';
     }
+    // The remembered message is gone when an older one becomes the last.
+    if (c.kept && m.id < c.kept.id) {
+      c.kept = null;
+    }
+    c.last = m;
+    c.lastMsgId = m.id;
+    this.showLast(c);
+  }
+
+  // The row shows the last message, or, while that one is filtered, the
+  // newest message before it that is not.
+  private showLast(c: ChatItem): void {
+    const last = c.last;
+    if (!last) {
+      return;
+    }
+    const filters = Filters.get();
+    let m: MsgItem | null = last;
+    // Previews go by what is already known: the classifier is only asked
+    // about messages of a chat that is opened, or that raise a notification.
+    if (filters.check(last, c, false)) {
+      m = c.kept && c.kept.id < last.id && !filters.check(c.kept, c, false) ? c.kept : null;
+      if (!m) {
+        if (c.kept) {
+          // The remembered message is filtered now as well: look again.
+          c.kept = null;
+          this.keptAsked.delete(c.id);
+        }
+        this.findKept(c, last.id);
+      }
+    } else {
+      c.kept = last;
+    }
+    if (!m) {
+      c.lastText = '已过滤的消息';
+      c.lastDate = last.date;
+      c.lastOutgoing = false;
+      c.shownMsgId = last.id;
+      return;
+    }
     let text = summary(m);
     if (c.type === 'group' || c.type === 'supergroup') {
       const who = m.outgoing ? '我' : this.nameOf(m.senderId, m.senderIsChat).split(' ')[0];
@@ -219,8 +266,51 @@ export class ChatStore {
     }
     c.lastText = text;
     c.lastDate = m.date;
-    c.lastMsgId = m.id;
     c.lastOutgoing = m.outgoing;
+    c.shownMsgId = m.id;
+  }
+
+  // Looks a few messages back for one to show instead of a filtered last message.
+  private findKept(c: ChatItem, lastId: number, attempt: number = 0): void {
+    const asked = `${lastId}:${Filters.get().configRev}`;
+    if (attempt === 0) {
+      if (this.keptAsked.get(c.id) === asked) {
+        return;
+      }
+      this.keptAsked.set(c.id, asked);
+    }
+    this.core.td.send(o({ '@type': 'getChatHistory', 'chat_id': c.id, 'from_message_id': lastId, 'offset': 0,
+      'limit': KEPT_SEARCH, 'only_local': false })).then((r: TdObject) => {
+      if (!c.last || c.last.id !== lastId) {
+        return;
+      }
+      const list = ((r['messages'] as TdObject[]) ?? []).filter((raw: TdObject) => raw !== null);
+      const filters = Filters.get();
+      for (const raw of list) {
+        const m = new MsgItem();
+        try {
+          fillMessage(m, raw, (id: number, isChat: boolean) => this.nameOf(id, isChat));
+        } catch (e) {
+          continue;
+        }
+        if (m.id < lastId && !filters.check(m, c, false)) {
+          c.kept = m;
+          this.showLast(c);
+          this.core.emit('chats');
+          return;
+        }
+      }
+      // TDLib answers with what it has locally while it fetches the rest.
+      if (list.length < KEPT_SEARCH && attempt < 2) {
+        setTimeout((): void => this.findKept(c, lastId, attempt + 1), 1500);
+      }
+    }).catch(() => {});
+  }
+
+  // The filters changed: previews are worked out again.
+  refilter(): void {
+    this.chats.forEach((c: ChatItem) => this.showLast(c));
+    this.core.emit('chats');
   }
 
   private applyNotify(c: ChatItem, s: TdObject): void {
