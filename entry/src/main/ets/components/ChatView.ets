@@ -8,6 +8,7 @@ import { geoLocationManager } from '@kit.LocationKit';
 import { AlbumItem, BubbleActions, BubbleData, MessageBubble } from './MessageBubble';
 import { ActionPanel, PanelItem } from './ActionPanel';
 import { Avatar } from './Avatar';
+import { FloatButton } from './FloatButton';
 import { StickerPanel } from './StickerPanel';
 import { AppState, copyText, ForwardRequest, ViewerItem } from '../common/AppState';
 import { bubbleMaxWidth, columnsFor, mediaMaxHeight, mediaWidth, panelHeight, stickerSide } from '../common/Layout';
@@ -2144,15 +2145,9 @@ export struct ChatView {
       }
 
       if (this.mentionCount > 0) {
-        Stack({ alignContent: Alignment.Top }) {
-          Text('@').fontSize(20).width(44).height(44).textAlign(TextAlign.Center).borderRadius(22)
-            .fontColor($r('app.color.accent')).backgroundColor($r('app.color.card'))
-            .shadow({ radius: 6, color: '#33000000' }).margin({ top: 8 })
-          Text(String(this.mentionCount)).fontSize(11).fontColor(Color.White).padding({ left: 6, right: 6 }).height(18)
-            .borderRadius(9).backgroundColor($r('app.color.accent'))
-        }
-        .margin({ right: 14, bottom: this.showScrollDown ? 78 : 14 })
-        .onClick(() => this.nextMention())
+        FloatButton({ label: '@', count: this.mentionCount })
+          .margin({ right: 12, bottom: this.showScrollDown ? 74 : 14 })
+          .onClick(() => this.nextMention())
       }
 
       if (this.dropping) {
@@ -2168,17 +2163,9 @@ export struct ChatView {
       }
 
       if (this.showScrollDown) {
-        Stack({ alignContent: Alignment.Top }) {
-          Text('⌄').fontSize(26).width(44).height(44).textAlign(TextAlign.Center).borderRadius(22)
-            .fontColor($r('app.color.text_primary')).backgroundColor($r('app.color.card'))
-            .shadow({ radius: 6, color: '#33000000' }).margin({ top: 8 })
-          if (this.unread > 0) {
-            Text(this.unread > 999 ? '999+' : String(this.unread)).fontSize(11).fontColor(Color.White)
-              .padding({ left: 6, right: 6 }).height(18).borderRadius(9).backgroundColor($r('app.color.accent'))
-          }
-        }
-        .margin({ right: 14, bottom: 14 })
-        .onClick(() => this.scrollToBottom())
+        FloatButton({ count: this.unread })
+          .margin({ right: 12, bottom: 14 })
+          .onClick(() => this.scrollToBottom())
       }
     }
     .layoutWeight(1)
