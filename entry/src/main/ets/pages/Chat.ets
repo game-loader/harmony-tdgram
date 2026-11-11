@@ -1,5 +1,6 @@
 import { router } from '@kit.ArkUI';
-import { ChatController, ChatView } from '../components/ChatView';
+import { ChatController } from '../components/ChatView';
+import { ChatPane } from '../components/ChatPane';
 
 interface ChatParams {
   chatId: number;
@@ -21,7 +22,7 @@ struct Chat {
 
   build() {
     Column() {
-      ChatView({
+      ChatPane({
         chatId: this.chatId,
         messageId: this.messageId,
         controller: this.controller,

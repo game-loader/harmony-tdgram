@@ -80,6 +80,14 @@ const OUT_BG = '#D9F2C6';
 const IN_BG = '#FFFFFF';
 const MEDIA_W = 240;
 const ACCENT = '#3A8DDE';
+function chunk(list: ReactionItem[], size: number): ReactionItem[][] {
+  const out: ReactionItem[][] = [];
+  for (let i = 0; i < list.length; i += size) {
+    out.push(list.slice(i, i + size));
+  }
+  return out;
+}
+
 function mediaSize(m: MsgItem, maxW: number, maxH: number): number[] {
   if (!m.width || !m.height) {
     return [maxW, maxW * 0.75];
@@ -513,24 +521,30 @@ export struct MessageBubble {
           .fontSize(11).fontColor(this.data.msg.failed ? Color.Red : '#4FAE4E')
       }
     }
-    .justifyContent(FlexAlign.End)
-    .width('100%')
+    // Hug the content: a full-width footer would stretch every bubble.
+    .alignSelf(ItemAlign.End)
   }
 
   @Builder
   Reactions() {
     if (this.data.msg.reactions.length > 0) {
-      Flex({ wrap: FlexWrap.Wrap }) {
-        ForEach(this.data.msg.reactions, (r: ReactionItem) => {
-          Text(`${r.emoji} ${r.count}`).fontSize(13)
-            .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-            .margin({ right: 4, top: 4 })
-            .borderRadius(12)
-            .backgroundColor(r.chosen ? ACCENT : '#1A3A8DDE')
-            .fontColor(r.chosen ? Color.White : ACCENT)
-            .onClick(() => this.actions?.onReact(this.data, r.emoji))
-        }, (r: ReactionItem) => `${r.emoji}|${r.count}|${r.chosen}`)
+      // Rows of four chips; a wrapping Flex would take the full bubble width.
+      Column({ space: 4 }) {
+        ForEach(chunk(this.data.msg.reactions, 4), (row: ReactionItem[], ri: number) => {
+          Row({ space: 4 }) {
+            ForEach(row, (r: ReactionItem) => {
+              Text(`${r.emoji} ${r.count}`).fontSize(13)
+                .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                .borderRadius(12)
+                .backgroundColor(r.chosen ? ACCENT : '#1A3A8DDE')
+                .fontColor(r.chosen ? Color.White : ACCENT)
+                .onClick(() => this.actions?.onReact(this.data, r.emoji))
+            }, (r: ReactionItem) => `${r.emoji}|${r.count}|${r.chosen}`)
+          }
+        }, (row: ReactionItem[], ri: number) => `${ri}|${row.map((r: ReactionItem) => r.emoji + r.count + r.chosen).join()}`)
       }
+      .alignItems(HorizontalAlign.Start)
+      .margin({ top: 2 })
     }
   }
 

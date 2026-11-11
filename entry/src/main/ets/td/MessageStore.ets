@@ -2,6 +2,7 @@ import { AccountCore } from './Core';
 import { o, TdObject } from './TdClient';
 import { MsgItem, ReactionItem } from './Models';
 import { fillContent, fillInteraction, fillMessage, NameOf } from './Parse';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const PAGE = 40;
 
@@ -15,6 +16,7 @@ export class MessageStore {
   private core: AccountCore;
   private nameOf: NameOf;
   chatId: number = 0;
+  topicId: number = 0; // forum topic being viewed, 0 for the whole chat
   messages: MsgItem[] = []; // ascending by id
   olderDone: boolean = false;
   // False after jumping to an old message: newer pages must be loaded.
@@ -28,8 +30,34 @@ export class MessageStore {
     this.nameOf = nameOf;
   }
 
+  // One malformed message must not blank the whole page, so parse errors
+  // become an "unsupported" bubble instead of rejecting the history.
   private parse(raw: TdObject): MsgItem {
-    return fillMessage(new MsgItem(), raw, this.nameOf);
+    const item = new MsgItem();
+    try {
+      return fillMessage(item, raw, this.nameOf);
+    } catch (e) {
+      hilog.warn(0x0000, 'tdgram', 'parse message failed: %{public}s', String(e));
+      item.id = (raw['id'] as number) ?? 0;
+      item.chatId = (raw['chat_id'] as number) ?? 0;
+      item.date = (raw['date'] as number) ?? 0;
+      item.kind = 'unsupported';
+      item.text = '无法显示的消息，请在官方客户端查看';
+      item.version++;
+      return item;
+    }
+  }
+
+  private refill(m: MsgItem, raw: TdObject): MsgItem {
+    try {
+      return fillMessage(m, raw, this.nameOf);
+    } catch (e) {
+      return m;
+    }
+  }
+
+  private topic(): TdObject | null {
+    return this.topicId ? o({ '@type': 'messageTopicForum', 'forum_topic_id': this.topicId }) : null;
   }
 
   // Parses a message that is not part of the open chat (search results).
@@ -41,10 +69,11 @@ export class MessageStore {
 
   // Returns a session token for close(). In split view the next chat can
   // open before the previous view is torn down; a stale close is ignored.
-  open(chatId: number): number {
+  open(chatId: number, topicId: number = 0): number {
     this.closeChat();
     this.session++;
     this.chatId = chatId;
+    this.topicId = topicId;
     this.messages = [];
     this.olderDone = false;
     this.atLatest = true;
@@ -66,6 +95,7 @@ export class MessageStore {
       this.core.td.send(o({ '@type': 'closeChat', 'chat_id': this.chatId })).catch(() => {});
     }
     this.chatId = 0;
+    this.topicId = 0;
     this.messages = [];
   }
 
@@ -81,17 +111,21 @@ export class MessageStore {
     for (const raw of list) {
       const id = raw['id'] as number;
       const existing = byId.get(id);
-      byId.set(id, existing ? fillMessage(existing, raw, this.nameOf) : this.parse(raw));
+      byId.set(id, existing ? this.refill(existing, raw) : this.parse(raw));
     }
     this.messages = Array.from(byId.values()).sort((a: MsgItem, b: MsgItem) => a.id - b.id);
   }
 
   private history(from: number, offset: number, limit: number): Promise<TdObject[]> {
     const chatId = this.chatId;
-    return this.core.td.send(o({
-      '@type': 'getChatHistory', 'chat_id': chatId, 'from_message_id': from,
-      'offset': offset, 'limit': limit, 'only_local': false
-    })).then((res: TdObject) => chatId === this.chatId ? ((res['messages'] as TdObject[]) ?? []) : []);
+    const topicId = this.topicId;
+    const req = topicId ?
+      o({ '@type': 'getForumTopicHistory', 'chat_id': chatId, 'forum_topic_id': topicId, 'from_message_id': from,
+        'offset': offset, 'limit': limit }) :
+      o({ '@type': 'getChatHistory', 'chat_id': chatId, 'from_message_id': from,
+        'offset': offset, 'limit': limit, 'only_local': false });
+    return this.core.td.send(req).then((res: TdObject) =>
+      chatId === this.chatId && topicId === this.topicId ? ((res['messages'] as TdObject[]) ?? []) : []);
   }
 
   // TDLib may return short pages while it fetches from the server, so only an
@@ -168,7 +202,8 @@ export class MessageStore {
     this.core.td.send(o({
       '@type': 'viewMessages', 'chat_id': this.chatId,
       'message_ids': [this.messages[this.messages.length - 1].id],
-      'source': o({ '@type': 'messageSourceChatHistory' }), 'force_read': true
+      'source': o({ '@type': this.topicId ? 'messageSourceForumTopicHistory' : 'messageSourceChatHistory' }),
+      'force_read': true
     })).catch(() => {});
   }
 
@@ -198,6 +233,10 @@ export class MessageStore {
       '@type': 'sendMessage', 'chat_id': this.chatId, 'input_message_content': content,
       'options': o({ '@type': 'messageSendOptions', 'disable_notification': opts.silent })
     };
+    const topic = this.topic();
+    if (topic) {
+      req['topic_id'] = topic;
+    }
     if (opts.replyTo) {
       req['reply_to'] = o({ '@type': 'inputMessageReplyToMessage', 'message_id': opts.replyTo });
     }
@@ -322,8 +361,12 @@ export class MessageStore {
 
   sendTyping(action: string): void {
     if (this.chatId) {
-      this.core.td.send(o({ '@type': 'sendChatAction', 'chat_id': this.chatId, 'action': o({ '@type': action }) }))
-        .catch(() => {});
+      const req: TdObject = { '@type': 'sendChatAction', 'chat_id': this.chatId, 'action': o({ '@type': action }) };
+      const topic = this.topic();
+      if (topic) {
+        req['topic_id'] = topic;
+      }
+      this.core.td.send(req).catch(() => {});
     }
   }
   // ---- Message actions ----
@@ -429,10 +472,15 @@ export class MessageStore {
   }
 
   search(query: string, filter: string, from: number): Promise<MsgItem[]> {
-    return this.core.td.send(o({
-      '@type': 'searchChatMessages', 'chat_id': this.chatId, 'query': query, 'from_message_id': from,
-      'offset': 0, 'limit': 50, 'filter': o({ '@type': filter })
-    })).then((r: TdObject) => ((r['messages'] as TdObject[]) ?? []).map((raw: TdObject) => this.parse(raw)));
+    const req: TdObject = {
+      '@type': 'searchChatMessages', 'chat_id': this.chatId, 'query': query,
+      'from_message_id': from, 'offset': 0, 'limit': 50, 'filter': o({ '@type': filter })
+    };
+    const topic = this.topic();
+    if (topic) {
+      req['topic_id'] = topic;
+    }
+    return this.core.td.send(req).then((r: TdObject) => ((r['messages'] as TdObject[]) ?? []).map((raw: TdObject) => this.parse(raw)));
   }
 
   // ---- Updates for the open chat ----
@@ -441,10 +489,16 @@ export class MessageStore {
     if ((raw['chat_id'] as number) !== this.chatId) {
       return;
     }
+    if (this.topicId) {
+      const t = raw['topic_id'] as TdObject | undefined;
+      if (!t || t['@type'] !== 'messageTopicForum' || (t['forum_topic_id'] as number) !== this.topicId) {
+        return;
+      }
+    }
     const id = replaceId || (raw['id'] as number);
     const existing = this.find(id);
     if (existing) {
-      fillMessage(existing, raw, this.nameOf);
+      this.refill(existing, raw);
     } else if (this.atLatest) {
       this.messages.push(this.parse(raw));
       this.markRead();
@@ -478,7 +532,13 @@ export class MessageStore {
         this.upsert(u['message'] as TdObject, u['old_message_id'] as number);
         break;
       case 'updateMessageContent':
-        this.patch(u, (m: MsgItem) => fillContent(m, u['new_content'] as TdObject, this.nameOf));
+        this.patch(u, (m: MsgItem) => {
+          try {
+            fillContent(m, u['new_content'] as TdObject, this.nameOf);
+          } catch (e) {
+            m.kind = 'unsupported';
+          }
+        });
         break;
       case 'updateMessageEdited':
         this.patch(u, (m: MsgItem) => { m.editDate = u['edit_date'] as number; });

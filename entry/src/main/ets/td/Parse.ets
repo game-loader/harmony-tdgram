@@ -216,7 +216,8 @@ export function fillContent(item: MsgItem, content: TdObject, nameOf: NameOf): v
       item.kind = 'call';
       item.callVideo = content['is_video'] as boolean;
       item.duration = content['duration'] as number;
-      item.callMissed = ((content['discard_reason'] as TdObject)['@type'] as string) === 'callDiscardReasonMissed';
+      const reason = content['discard_reason'] as TdObject | undefined;
+      item.callMissed = reason !== undefined && (reason['@type'] as string) === 'callDiscardReasonMissed';
       break;
     }
     default: {
@@ -344,9 +345,9 @@ export function fillMessage(item: MsgItem, msg: TdObject, nameOf: NameOf): MsgIt
   item.id = msg['id'] as number;
   item.chatId = msg['chat_id'] as number;
   item.outgoing = msg['is_outgoing'] as boolean;
-  const sender = msg['sender_id'] as TdObject;
+  const sender = msg['sender_id'] as TdObject | undefined;
   item.senderId = senderOf(sender);
-  item.senderIsChat = sender['@type'] === 'messageSenderChat';
+  item.senderIsChat = sender !== undefined && sender['@type'] === 'messageSenderChat';
   item.date = msg['date'] as number;
   item.editDate = msg['edit_date'] as number;
   const sending = msg['sending_state'] as TdObject | undefined;
@@ -359,6 +360,8 @@ export function fillMessage(item: MsgItem, msg: TdObject, nameOf: NameOf): MsgIt
   item.selfDestructTime = sdt && sdt['@type'] === 'messageSelfDestructTypeTimer' ?
     sdt['self_destruct_time'] as number : 0;
   item.albumId = String(msg['media_album_id'] ?? '0');
+  const topic = msg['topic_id'] as TdObject | undefined;
+  item.topicId = topic && topic['@type'] === 'messageTopicForum' ? topic['forum_topic_id'] as number : 0;
   item.forwardFrom = forwardName(msg['forward_info'] as TdObject | undefined, nameOf);
   fillInteraction(item, msg['interaction_info'] as TdObject | undefined);
   item.buttons = parseButtons(msg['reply_markup'] as TdObject | undefined);
@@ -386,16 +389,16 @@ function forwardName(info: TdObject | undefined, nameOf: NameOf): string {
   if (!info) {
     return '';
   }
-  const origin = info['origin'] as TdObject;
-  switch (origin['@type'] as string) {
+  const origin = info['origin'] as TdObject | undefined;
+  switch (origin ? origin['@type'] as string : '') {
     case 'messageOriginUser':
-      return nameOf(origin['sender_user_id'] as number, false);
+      return nameOf(origin!['sender_user_id'] as number, false);
     case 'messageOriginHiddenUser':
-      return origin['sender_name'] as string;
+      return origin!['sender_name'] as string;
     case 'messageOriginChat':
-      return nameOf(origin['sender_chat_id'] as number, true);
+      return nameOf(origin!['sender_chat_id'] as number, true);
     case 'messageOriginChannel':
-      return nameOf(origin['chat_id'] as number, true);
+      return nameOf(origin!['chat_id'] as number, true);
     default:
       return '未知来源';
   }

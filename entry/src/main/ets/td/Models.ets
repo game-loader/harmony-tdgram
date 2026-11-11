@@ -35,6 +35,21 @@ export class ChatItem {
   canSend: boolean = true;
 }
 
+// A topic of a forum supergroup.
+export class TopicItem {
+  id: number = 0;
+  name: string = '';
+  color: number = 0x6FB9F0;
+  isGeneral: boolean = false;
+  isClosed: boolean = false;
+  isPinned: boolean = false;
+  unread: number = 0;
+  unreadMentions: number = 0;
+  lastText: string = '';
+  lastDate: number = 0;
+  order: string = '0';
+}
+
 export class UserItem {
   id: number = 0;
   firstName: string = '';
@@ -99,6 +114,7 @@ export class MsgItem {
   selfDestructIn: number = 0;
   selfDestructTime: number = 0;
   hasSpoiler: boolean = false;
+  topicId: number = 0;   // forum topic the message belongs to, 0 outside forums
   albumId: string = '0'; // media_album_id; messages sharing it form one album
   // Media: main file plus a preview (thumbnail file and inline minithumbnail).
   fileId: number = 0;

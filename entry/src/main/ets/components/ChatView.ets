@@ -43,6 +43,8 @@ export class ChatController {
 export struct ChatView {
   chatId: number = 0;
   messageId: number = 0;
+  topicId: number = 0;    // forum topic shown, 0 for an ordinary chat
+  topicName: string = '';
   showBack: boolean = true;
   controller: ChatController = new ChatController();
   onBack: () => void = (): void => {};
@@ -88,11 +90,11 @@ export struct ChatView {
     this.pendingJump = this.messageId;
     this.controller.back = (): boolean => this.handleBack();
     this.chat = this.acc.chat(this.chatId);
-    this.draft = this.chat ? this.chat.draft : '';
+    this.draft = this.chat && !this.topicId ? this.chat.draft : '';
     this.acc.on(this.listener);
     this.audioPlayer.on(this.audioListener);
     this.audioPlayer.onEnded = (key: string) => this.playNextVoice(key);
-    this.session = this.acc.messages.open(this.chatId);
+    this.session = this.acc.messages.open(this.chatId, this.topicId);
     this.refreshHeader();
     if (this.pendingJump) {
       this.jumpTo(this.pendingJump);
@@ -100,7 +102,8 @@ export struct ChatView {
   }
 
   aboutToDisappear(): void {
-    if (this.chat && !this.editing && this.draft !== this.chat.draft) {
+    // Drafts are per chat; a topic's draft would overwrite the chat's.
+    if (this.chat && !this.topicId && !this.editing && this.draft !== this.chat.draft) {
       this.acc.messages.setDraft(this.chatId, this.draft.trim(), this.replyTo ? this.replyTo.id : 0);
     }
     this.acc.off(this.listener);
@@ -146,7 +149,7 @@ export struct ChatView {
       return;
     }
     this.chat = c;
-    this.title = c.userId === this.acc.myUserId ? '收藏夹' : c.title;
+    this.title = this.topicId ? this.topicName : (c.userId === this.acc.myUserId ? '收藏夹' : c.title);
     this.photo = c.photoPath || this.acc.files.path(c.photoFileId);
     this.canSend = c.canSend;
     const typing = this.acc.chats.typingText(c.id);
@@ -156,7 +159,7 @@ export struct ChatView {
       const u = this.acc.user(c.userId);
       this.subtitle = u ? (u.isBot ? '机器人' : lastSeen(u.status)) : '';
     } else {
-      this.subtitle = c.type === 'channel' ? '频道' : '群组';
+      this.subtitle = this.topicId ? c.title : (c.type === 'channel' ? '频道' : '群组');
     }
     if (c.autoDeleteTime) {
       this.subtitle += ` · ${formatTimer(c.autoDeleteTime)}后自动删除`;

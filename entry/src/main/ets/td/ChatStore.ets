@@ -1,6 +1,6 @@
 import { AccountCore } from './Core';
 import { o, TdObject } from './TdClient';
-import { ChatItem, ChatPos, SecretChatItem, UserItem } from './Models';
+import { ChatItem, ChatPos, SecretChatItem, TopicItem, UserItem } from './Models';
 import { fillMessage, localPath, summary } from './Parse';
 import { MsgItem } from './Models';
 
@@ -39,6 +39,8 @@ export class ChatStore {
   chats: Map<number, ChatItem> = new Map();
   users: Map<number, UserItem> = new Map();
   secretChats: Map<number, SecretChatItem> = new Map();
+  // Supergroup id -> is a forum (members post in separate topics).
+  forums: Map<number, boolean> = new Map();
   folders: FolderItem[] = [];
   // Typing users per chat: chat id -> (sender id -> action text).
   typing: Map<number, Map<number, string>> = new Map();
@@ -76,6 +78,40 @@ export class ChatStore {
       return x === y ? 0 : (x > y ? -1 : 1);
     });
     return list;
+  }
+
+  isForum(c: ChatItem): boolean {
+    return c.type === 'supergroup' && (this.forums.get(c.groupId) ?? false);
+  }
+
+  // Topics of a forum, pinned first then by recent activity.
+  topics(chatId: number): Promise<TopicItem[]> {
+    return this.core.td.send(o({
+      '@type': 'getForumTopics', 'chat_id': chatId, 'query': '', 'offset_date': 0,
+      'offset_message_id': 0, 'offset_forum_topic_id': 0, 'limit': 100
+    })).then((r: TdObject) => ((r['topics'] as TdObject[]) ?? []).map((t: TdObject) => this.topic(t)));
+  }
+
+  private topic(t: TdObject): TopicItem {
+    const info = t['info'] as TdObject;
+    const item = new TopicItem();
+    item.id = info['forum_topic_id'] as number;
+    item.name = info['name'] as string;
+    item.color = ((info['icon'] as TdObject)['color'] as number) || 0x6FB9F0;
+    item.isGeneral = info['is_general'] as boolean;
+    item.isClosed = info['is_closed'] as boolean;
+    item.isPinned = t['is_pinned'] as boolean;
+    item.unread = (t['unread_count'] as number) ?? 0;
+    item.unreadMentions = (t['unread_mention_count'] as number) ?? 0;
+    item.order = String(t['order'] ?? '0');
+    const last = t['last_message'] as TdObject | undefined;
+    if (last) {
+      const m = fillMessage(new MsgItem(), last, (id: number, isChat: boolean) => this.nameOf(id, isChat));
+      const who = m.outgoing ? '我' : this.nameOf(m.senderId, m.senderIsChat).split(' ')[0];
+      item.lastText = who && m.kind !== 'service' ? `${who}: ${summary(m)}` : summary(m);
+      item.lastDate = m.date;
+    }
+    return item;
   }
 
   isPinned(c: ChatItem, folderId: number): boolean {
@@ -325,6 +361,16 @@ export class ChatStore {
       }
       case 'updateUser':
         this.onUser(u['user'] as TdObject);
+        break;
+      case 'updateSupergroup': {
+        const sg = u['supergroup'] as TdObject;
+        this.forums.set(sg['id'] as number, sg['is_forum'] as boolean);
+        this.core.emit('chats');
+        break;
+      }
+      case 'updateForumTopicInfo':
+      case 'updateForumTopic':
+        this.core.emit('topics');
         break;
       case 'updateUserStatus': {
         const user = this.users.get(u['user_id'] as number);

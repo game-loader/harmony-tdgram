@@ -1,6 +1,7 @@
 import { router, promptAction } from '@kit.ArkUI';
 import { ChatRow, ChatRowData } from '../components/ChatRow';
-import { ChatController, ChatView } from '../components/ChatView';
+import { ChatController } from '../components/ChatView';
+import { ChatPane } from '../components/ChatPane';
 import { Avatar } from '../components/Avatar';
 import { Account } from '../td/Account';
 import { Accounts } from '../td/Accounts';
@@ -278,7 +279,7 @@ struct Main {
       if (this.open.chatId) {
         Column() {
           ForEach([this.open], (oc: OpenChat) => {
-            ChatView({
+            ChatPane({
               chatId: oc.chatId,
               messageId: oc.messageId,
               showBack: !this.wide(),
