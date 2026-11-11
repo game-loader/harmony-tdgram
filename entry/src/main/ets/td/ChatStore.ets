@@ -47,6 +47,11 @@ export class ChatStore {
   private loadedLists: Set<string> = new Set();
   private typingTimers: Map<string, number> = new Map();
   scopeMute: Map<string, number> = new Map(); // private | group | channel -> mute_for
+  // Unread unmuted chats per list (key: list key), as counted by TDLib.
+  unreadChats: Map<string, number> = new Map();
+  // Unread messages in unmuted chats of the main list, for the app icon badge.
+  unreadMessages: number = 0;
+  onUnread: () => void = () => {};
   // Called for each incoming message, for notifications.
   onIncoming: (chat: ChatItem, msg: MsgItem) => void = () => {};
 
@@ -78,6 +83,23 @@ export class ChatStore {
       return x === y ? 0 : (x > y ? -1 : 1);
     });
     return list;
+  }
+
+  // Unread unmuted chats of a folder, for its tab.
+  unreadIn(folderId: number): number {
+    const key = folderKey(folderId);
+    const counted = this.unreadChats.get(key);
+    if (counted !== undefined) {
+      return counted;
+    }
+    let n = 0;
+    this.chats.forEach((c: ChatItem) => {
+      const p = c.positions.get(key);
+      if (p && p.order !== '0' && (c.unread > 0 || c.markedUnread) && !this.isMuted(c)) {
+        n++;
+      }
+    });
+    return n;
   }
 
   isForum(c: ChatItem): boolean {
@@ -235,6 +257,7 @@ export class ChatStore {
     c.lastReadOutboxId = raw['last_read_outbox_message_id'] as number;
     c.lastReadInboxId = (raw['last_read_inbox_message_id'] as number) ?? 0;
     c.autoDeleteTime = raw['message_auto_delete_time'] as number;
+    c.replyMarkupId = (raw['reply_markup_message_id'] as number) ?? 0;
     const perms = raw['permissions'] as TdObject | undefined;
     c.canSend = c.type !== 'channel' && (!perms || (perms['can_send_basic_messages'] as boolean) !== false);
     const photo = raw['photo'] as TdObject | undefined;
@@ -366,6 +389,22 @@ export class ChatStore {
         break;
       case 'updateChatMessageAutoDeleteTime':
         this.patch(u, (c: ChatItem) => { c.autoDeleteTime = u['message_auto_delete_time'] as number; });
+        break;
+      case 'updateChatReplyMarkup':
+        this.patch(u, (c: ChatItem) => {
+          const m = u['reply_markup_message'] as TdObject | undefined;
+          c.replyMarkupId = m ? m['id'] as number : 0;
+        });
+        break;
+      case 'updateUnreadChatCount':
+        this.unreadChats.set(listKey(u['chat_list'] as TdObject), u['unread_unmuted_count'] as number);
+        this.core.emit('chats');
+        break;
+      case 'updateUnreadMessageCount':
+        if (listKey(u['chat_list'] as TdObject) === 'main') {
+          this.unreadMessages = u['unread_unmuted_count'] as number;
+          this.onUnread();
+        }
         break;
       case 'updateChatPermissions':
         this.patch(u, (c: ChatItem) => {

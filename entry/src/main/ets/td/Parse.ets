@@ -181,6 +181,7 @@ export function fillContent(item: MsgItem, content: TdObject, nameOf: NameOf): v
       item.pollTotal = p['total_voter_count'] as number;
       item.pollClosed = p['is_closed'] as boolean;
       item.pollQuiz = ((p['type'] as TdObject)['@type'] as string) === 'pollTypeQuiz';
+      item.pollMultiple = (p['allows_multiple_answers'] as boolean) === true;
       item.pollOptions = ((p['options'] as TdObject[]) ?? []).map((op: TdObject) => {
         const po = new PollOptionItem();
         po.text = ft(op['text']);
@@ -394,6 +395,8 @@ export function fillMessage(item: MsgItem, msg: TdObject, nameOf: NameOf): MsgIt
   const sending = msg['sending_state'] as TdObject | undefined;
   item.pending = sending !== undefined && sending['@type'] === 'messageSendingStatePending';
   item.failed = sending !== undefined && sending['@type'] === 'messageSendingStateFailed';
+  item.canRetry = item.failed && (sending!['can_retry'] as boolean) === true;
+  item.isChannelPost = (msg['is_channel_post'] as boolean) === true;
   const reply = msg['reply_to'] as TdObject | undefined;
   item.replyToId = reply && reply['@type'] === 'messageReplyToMessage' ? reply['message_id'] as number : 0;
   item.selfDestructIn = (msg['self_destruct_in'] as number) ?? 0;
@@ -406,6 +409,7 @@ export function fillMessage(item: MsgItem, msg: TdObject, nameOf: NameOf): MsgIt
   item.forwardFrom = forwardName(msg['forward_info'] as TdObject | undefined, nameOf);
   fillInteraction(item, msg['interaction_info'] as TdObject | undefined);
   item.buttons = parseButtons(msg['reply_markup'] as TdObject | undefined);
+  fillKeyboard(item, msg['reply_markup'] as TdObject | undefined);
   fillContent(item, msg['content'] as TdObject, nameOf);
   item.version++;
   return item;
@@ -413,6 +417,9 @@ export function fillMessage(item: MsgItem, msg: TdObject, nameOf: NameOf): MsgIt
 
 export function fillInteraction(item: MsgItem, info: TdObject | undefined): void {
   item.views = info ? (info['view_count'] as number) : 0;
+  const replies = info ? info['reply_info'] as TdObject | undefined : undefined;
+  item.hasThread = replies !== undefined && replies !== null;
+  item.replyCount = item.hasThread ? ((replies!['reply_count'] as number) ?? 0) : 0;
   item.reactions = [];
   const r = info ? info['reactions'] as TdObject | undefined : undefined;
   for (const reaction of r ? ((r['reactions'] as TdObject[]) ?? []) : []) {
@@ -443,6 +450,17 @@ function forwardName(info: TdObject | undefined, nameOf: NameOf): string {
     default:
       return '未知来源';
   }
+}
+
+function fillKeyboard(item: MsgItem, markup: TdObject | undefined): void {
+  item.keyboard = [];
+  item.keyboardOneTime = false;
+  if (!markup || markup['@type'] !== 'replyMarkupShowKeyboard') {
+    return;
+  }
+  item.keyboardOneTime = (markup['one_time'] as boolean) === true;
+  item.keyboard = ((markup['rows'] as TdObject[][]) ?? []).map((row: TdObject[]) =>
+    row.map((b: TdObject) => b['text'] as string));
 }
 
 function parseButtons(markup: TdObject | undefined): InlineButton[][] {

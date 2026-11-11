@@ -101,6 +101,7 @@ export class Accounts {
   private create(slot: number): Account {
     const a = new Account(slot, this.context!);
     a.chats.onIncoming = (chat: ChatItem, msg: MsgItem) => this.notify(a, chat, msg);
+    a.chats.onUnread = (): void => this.updateBadge();
     a.onAuthChanged = (acc: Account) => {
       if (acc.authStep === 'ready') {
         this.applyGhost(acc);
@@ -225,6 +226,15 @@ export class Accounts {
       this.persist();
     }
     this.changed();
+  }
+
+  // Unread messages of unmuted chats, over all accounts, on the app icon.
+  private updateBadge(): void {
+    let total = 0;
+    for (const a of this.all()) {
+      total += a.authStep === 'ready' ? a.chats.unreadMessages : 0;
+    }
+    notificationManager.setBadgeNumber(Math.min(total, 9999)).catch(() => {});
   }
 
   clearNotifications(a: Account, chatId: number): void {

@@ -18,10 +18,11 @@ import { copyToCache, fileNameOf, formatDay, formatTime, lastSeen } from '../com
 import { Account, LinkTarget } from '../td/Account';
 import { Accounts } from '../td/Accounts';
 import { AccountEvent } from '../td/Core';
-import { ChatItem, InlineButton, MsgItem, ReactionItem } from '../td/Models';
+import { BotCmd, ChatItem, InlineButton, MsgItem, ReactionItem } from '../td/Models';
 import { formatTimer, summary } from '../td/Parse';
 import { MessageStore, OpenOptions, SearchPage, SendOptions, StoreEvent } from '../td/MessageStore';
 import { TdError, TdObject } from '../td/TdClient';
+import { unifiedDataChannel, uniformTypeDescriptor } from '@kit.ArkData';
 import { AudioService, VoiceRecorder } from '../services/AudioService';
 import { EncodedVoice } from 'libtdbridge.so';
 
@@ -36,6 +37,17 @@ class Hit {
   name: string = '';
   date: number = 0;
   text: string = '';
+}
+
+// A row of the suggestion list above the composer: a member to mention or a
+// bot command.
+class Suggestion {
+  title: string = '';
+  detail: string = '';
+  insert: string = '';   // text that replaces the typed token
+  userId: number = 0;    // member without a username: mentioned by id
+  photo: string = '';
+  command: boolean = false;
 }
 
 class MenuState {
@@ -132,6 +144,9 @@ export struct ChatView {
   topicName: string = '';
   readFrom: number = 0;    // topics: last read incoming message
   unreadCount: number = 0; // topics: unread messages
+  threadId: number = 0;    // comments or reply thread shown instead of the chat
+  threadTitle: string = '';
+  startParam: string = '';  // bot deep link: sent when "Start" is pressed
   nav: Nav = new Nav();
   controller: RouteController = new RouteController();
   onBack: () => void = (): void => {};
@@ -170,6 +185,14 @@ export struct ChatView {
   @State playerTitle: string = '';
   @State playerPlaying: boolean = false;
   @State playerSpeed: number = 1;
+  @State suggestions: Suggestion[] = [];
+  @State keyboard: string[][] = [];   // bot reply keyboard
+  @State showKeyboard: boolean = false;
+  @State botStart: boolean = false;   // empty chat with a bot: offer "Start"
+  @State mentionCount: number = 0;
+  @State swipeId: number = 0;         // bubble being dragged left to reply
+  @State swipeX: number = 0;
+  @State dropping: boolean = false;   // files are dragged over the chat
   private chat: ChatItem | undefined = undefined;
   private acc: Account = Accounts.get().active();
   private store: MessageStore = Accounts.get().active().store(0);
@@ -199,6 +222,13 @@ export struct ChatView {
   private searchSeq: number = 0;
   private searchNext: string = '';
   private searchedFor: string = '';
+  private caret: number = 0;
+  private suggestSeq: number = 0;
+  private commands: BotCmd[] | null = null;
+  private mentions: Map<string, number> = new Map(); // picked members without a username
+  private keyboardMsgId: number = 0;
+  private keyboardOneTime: boolean = false;
+  private mentionIds: number[] = [];
 
   aboutToAppear(): void {
     this.bubbleActions = this.makeActions();
@@ -207,17 +237,19 @@ export struct ChatView {
     this.controller.back = (): boolean => this.handleBack();
     this.controller.jumpTo = (id: number): void => this.jumpTo(id);
     this.chat = this.acc.chat(this.chatId);
-    this.draft = this.chat && !this.topicId ? this.chat.draft : '';
+    this.draft = this.chat && !this.topicId && !this.threadId ? this.chat.draft : '';
     const opt = new OpenOptions();
     opt.messageId = this.messageId;
-    if (this.topicId) {
+    if (this.threadId) {
+      // Threads open at their newest replies.
+    } else if (this.topicId) {
       opt.lastReadId = this.readFrom;
       opt.unread = this.unreadCount;
     } else if (this.chat) {
       opt.lastReadId = this.chat.lastReadInboxId;
       opt.unread = this.chat.unread;
     }
-    this.store = this.acc.openSession(this.chatId, this.topicId, opt);
+    this.store = this.acc.openSession(this.chatId, this.topicId, opt, this.threadId);
     this.store.onChange = (e: StoreEvent): void => this.onStore(e);
     Accounts.get().clearNotifications(this.acc, this.chatId);
     this.acc.on(this.listener);
@@ -225,7 +257,8 @@ export struct ChatView {
     this.audioPlayer.onEnded = (key: string) => this.playNextVoice(key);
     this.refreshHeader();
     this.onAudio();
-    if (this.chat) {
+    // Comments can be written without joining the discussion group.
+    if (this.chat && !this.threadId) {
       this.acc.notMember(this.chat).then((left: boolean) => {
         this.joinable = left;
       }).catch(() => {});
@@ -234,7 +267,7 @@ export struct ChatView {
 
   aboutToDisappear(): void {
     // Drafts are kept per chat; a topic's draft would overwrite the chat's.
-    if (this.chat && !this.topicId && !this.editing && this.draft !== this.chat.draft) {
+    if (this.chat && !this.topicId && !this.threadId && !this.editing && this.draft !== this.chat.draft) {
       this.store.setDraft(this.draft.trim(), this.replyTo ? this.replyTo.id : 0);
     }
     this.acc.off(this.listener);
@@ -258,10 +291,12 @@ export struct ChatView {
       this.rebuild(false);
       return true;
     }
-    if (this.showPanel || this.showAttach || this.searchOpen) {
+    if (this.showPanel || this.showAttach || this.searchOpen || this.showKeyboard || this.suggestions.length > 0) {
       this.showPanel = false;
       this.showAttach = false;
       this.searchOpen = false;
+      this.showKeyboard = false;
+      this.suggestions = [];
       return true;
     }
     return false;
@@ -313,11 +348,16 @@ export struct ChatView {
       return;
     }
     this.chat = c;
-    this.title = this.topicId ? this.topicName : (c.userId === this.acc.myUserId ? '收藏夹' : c.title);
+    this.title = this.threadId ? this.threadTitle :
+      (this.topicId ? this.topicName : (c.userId === this.acc.myUserId ? '收藏夹' : c.title));
     this.photo = c.photoPath || this.acc.files.path(c.photoFileId);
     this.canSend = c.canSend;
     this.muted = this.acc.chats.isMuted(c);
-    this.unread = this.topicId ? 0 : c.unread;
+    this.unread = this.topicId || this.threadId ? 0 : c.unread;
+    this.mentionCount = this.topicId || this.threadId ? 0 : c.unreadMentions;
+    if (!this.threadId && c.replyMarkupId !== this.keyboardMsgId) {
+      this.loadKeyboard(c.replyMarkupId);
+    }
     const typing = this.acc.chats.typingText(c.id);
     const conn = this.acc.connection;
     if (conn !== 'ready') {
@@ -329,7 +369,7 @@ export struct ChatView {
       const u = this.acc.user(c.userId);
       this.subtitle = c.userId === this.acc.myUserId ? '' : (u ? (u.isBot ? '机器人' : lastSeen(u.status)) : '');
     } else {
-      this.subtitle = this.topicId ? c.title : (c.type === 'channel' ? '频道' : '群组');
+      this.subtitle = this.topicId || this.threadId ? c.title : (c.type === 'channel' ? '频道' : '群组');
     }
     if (c.autoDeleteTime && conn === 'ready') {
       this.subtitle += `${this.subtitle ? ' · ' : ''}${formatTimer(c.autoDeleteTime)}后自动删除`;
@@ -433,6 +473,12 @@ export struct ChatView {
       d.highlight = this.highlightId !== 0 && group.some((x: MsgItem) => x.id === this.highlightId);
       d.unreadDivider = firstUnread !== 0 && group.some((x: MsgItem) => x.id === firstUnread);
       d.autoplay = settings.autoplayGifs;
+      d.canThread = !this.threadId && !this.topicId && m.hasThread && !m.pending && !m.failed &&
+        (m.isChannelPost || m.replyCount > 0);
+      // Not in secret chats: the map image is requested from Telegram's servers.
+      if (m.kind === 'location' && !(this.chat && this.chat.type === 'secret')) {
+        d.mapPath = files.path(this.acc.mapFile(m.lat, m.lon, m.chatId), 4);
+      }
       if (!prev || formatDay(prev.date) !== formatDay(m.date)) {
         d.dayLabel = formatDay(m.date);
       }
@@ -441,6 +487,11 @@ export struct ChatView {
     }
     this.source.update(out);
     this.count = messagesChanged || this.count >= 0 ? out.length : this.count;
+    if (messagesChanged) {
+      // An empty chat with a bot starts with the "Start" button.
+      const u = this.chat && this.chat.type === 'private' ? this.acc.user(this.chat.userId) : undefined;
+      this.botStart = u !== undefined && u.isBot && (this.startParam !== '' || (out.length === 0 && this.store.olderDone));
+    }
     const lastId = msgs.length > 0 ? msgs[msgs.length - 1].id : 0;
     this.lastShownId = lastId;
     if (!messagesChanged || out.length === 0) {
@@ -567,14 +618,23 @@ export struct ChatView {
       return;
     }
     this.draft = '';
-    this.after(this.store.sendText(text, this.opts(silent), md));
-    if (!this.topicId) {
+    this.suggestions = [];
+    const mentions = this.mentions;
+    this.mentions = new Map();
+    this.after(this.store.sendText(text, this.opts(silent), md, mentions));
+    if (!this.topicId && !this.threadId) {
       this.store.setDraft('', 0);
     }
   }
 
+  // Sends text as is (a bot keyboard button or a command).
+  private sendPlain(text: string): void {
+    this.after(this.store.sendText(text, this.opts(), false));
+  }
+
   onDraftChange(v: string): void {
     this.draft = v;
+    this.suggest();
     const now = Date.now();
     if (v && now - this.lastTyping > 4000 && !Accounts.get().settings.ghostMode) {
       this.lastTyping = now;
@@ -585,6 +645,225 @@ export struct ChatView {
   private closePanels(): void {
     this.showAttach = false;
     this.showPanel = false;
+    this.showKeyboard = false;
+  }
+
+  // ---- @mention and /command suggestions ----
+
+  // The token being typed: from the last '@' or '/' before the caret, when
+  // it starts a word and contains no whitespace.
+  private caretAt(): number {
+    return this.caret > 0 && this.caret <= this.draft.length ? this.caret : this.draft.length;
+  }
+
+  private token(): string {
+    const upTo = this.draft.substring(0, this.caretAt());
+    const m = /(^|\s)([@\/][^\s@\/]*)$/.exec(upTo);
+    return m ? m[2] : '';
+  }
+
+  private suggest(): void {
+    // The caret position arrives just after the text change.
+    setTimeout((): void => this.updateSuggestions(), 0);
+  }
+
+  private updateSuggestions(): void {
+    const tok = this.token();
+    const c = this.chat;
+    const seq = ++this.suggestSeq;
+    if (!tok || !c || this.editing) {
+      this.suggestions = [];
+      return;
+    }
+    if (tok.startsWith('/')) {
+      // Commands only make sense at the start of the message.
+      if (this.draft.trim() !== tok) {
+        this.suggestions = [];
+        return;
+      }
+      const show = (list: BotCmd[]): void => {
+        if (seq !== this.suggestSeq) {
+          return;
+        }
+        const q = tok.substring(1).toLowerCase();
+        this.suggestions = list.filter((b: BotCmd) => b.command.toLowerCase().startsWith(q)).slice(0, 12)
+          .map((b: BotCmd) => {
+            const s = new Suggestion();
+            s.command = true;
+            s.insert = `/${b.command}${b.bot ? '@' + b.bot : ''}`;
+            s.title = s.insert;
+            s.detail = b.description;
+            return s;
+          });
+      };
+      if (this.commands) {
+        show(this.commands);
+      } else {
+        this.acc.botCommands(c).then((list: BotCmd[]) => {
+          this.commands = list;
+          show(list);
+        }).catch(() => {
+          this.commands = [];
+        });
+      }
+      return;
+    }
+    if (c.type !== 'group' && c.type !== 'supergroup') {
+      this.suggestions = [];
+      return;
+    }
+    this.store.searchMembers(tok.substring(1)).then((ids: number[]) => {
+      if (seq !== this.suggestSeq) {
+        return;
+      }
+      const list: Suggestion[] = [];
+      for (const id of ids) {
+        const u = this.acc.user(id);
+        if (!u || id === this.acc.myUserId) {
+          continue;
+        }
+        const s = new Suggestion();
+        s.title = u.name();
+        s.detail = u.username ? '@' + u.username : '';
+        s.insert = u.username ? '@' + u.username : u.firstName || u.name();
+        s.userId = u.username ? 0 : id;
+        s.photo = this.acc.files.path(u.photoFileId);
+        list.push(s);
+      }
+      this.suggestions = list;
+    }).catch(() => {
+      if (seq === this.suggestSeq) {
+        this.suggestions = [];
+      }
+    });
+  }
+
+  private pickSuggestion(s: Suggestion): void {
+    const at = this.caretAt();
+    const tok = this.token();
+    const head = this.draft.substring(0, at - tok.length);
+    const tail = this.draft.substring(at);
+    this.suggestions = [];
+    this.suggestSeq++;
+    if (s.command) {
+      // Picking a command sends it, as in the official apps.
+      this.draft = '';
+      this.sendPlain(s.insert);
+      return;
+    }
+    if (s.userId) {
+      this.mentions.set(s.insert, s.userId);
+    }
+    this.draft = `${head}${s.insert} ${tail}`;
+    const pos = head.length + s.insert.length + 1;
+    this.caret = pos;
+    setTimeout((): void => { this.input.caretPosition(pos); }, 0);
+  }
+
+  // ---- Bot reply keyboard ----
+
+  private loadKeyboard(msgId: number): void {
+    this.keyboardMsgId = msgId;
+    if (!msgId) {
+      this.keyboard = [];
+      this.showKeyboard = false;
+      return;
+    }
+    this.store.fetch(this.chatId, msgId).then((m: MsgItem) => {
+      if (msgId !== this.keyboardMsgId) {
+        return;
+      }
+      this.keyboard = m.keyboard;
+      this.keyboardOneTime = m.keyboardOneTime;
+      // A new keyboard opens itself unless the user is typing.
+      this.showKeyboard = m.keyboard.length > 0 && !this.showPanel && !this.showAttach && this.draft.length === 0;
+    }).catch(() => {});
+  }
+
+  private pressKey(text: string): void {
+    this.sendPlain(text);
+    if (this.keyboardOneTime) {
+      this.showKeyboard = false;
+      this.store.keyboardUsed(this.keyboardMsgId);
+    }
+  }
+
+  private pressStart(): void {
+    if (this.chat) {
+      this.botStart = false;
+      this.after(this.store.startBot(this.chat.userId, this.startParam));
+      this.startParam = '';
+    }
+  }
+
+  // ---- Unread mentions ----
+
+  private nextMention(): void {
+    const jump = (): void => {
+      const id = this.mentionIds.pop();
+      if (id) {
+        this.jumpTo(id);
+      }
+    };
+    if (this.mentionIds.length > 0) {
+      jump();
+      return;
+    }
+    this.store.search('', 'searchMessagesFilterUnreadMention', '').then((p: SearchPage) => {
+      // Newest first from the server; the oldest unread mention comes first.
+      this.mentionIds = p.items.map((m: MsgItem) => m.id);
+      if (this.mentionIds.length === 0) {
+        this.toast('没有未读的提及');
+      }
+      jump();
+    }).catch(() => {});
+  }
+
+  // ---- Files dragged in from another app (split screen, floating window) ----
+
+  private handleDrop(e: DragEvent): void {
+    this.dropping = false;
+    if (!this.canSend || this.joinable) {
+      e.setResult(DragResult.DRAG_FAILED);
+      return;
+    }
+    const picks: MediaPick[] = [];
+    const texts: string[] = [];
+    let files = 0;
+    try {
+      for (const r of e.getData().getRecords()) {
+        const type = r.getType();
+        if (type === uniformTypeDescriptor.UniformDataType.IMAGE || type === uniformTypeDescriptor.UniformDataType.VIDEO) {
+          const f = r as unifiedDataChannel.File;
+          const p = new MediaPick();
+          p.video = type === uniformTypeDescriptor.UniformDataType.VIDEO;
+          p.path = copyToCache(this.ctx(), f.uri, fileNameOf(f.uri) || (p.video ? 'video.mp4' : 'image.jpg'));
+          picks.push(p);
+        } else if (type === uniformTypeDescriptor.UniformDataType.PLAIN_TEXT) {
+          texts.push((r as unifiedDataChannel.PlainText).textContent);
+        } else if (type === uniformTypeDescriptor.UniformDataType.HYPERLINK) {
+          texts.push((r as unifiedDataChannel.Hyperlink).url);
+        } else {
+          const f = r as unifiedDataChannel.File;
+          if (f.uri) {
+            this.after(this.store.sendDocument(copyToCache(this.ctx(), f.uri, fileNameOf(f.uri) || 'file'), '', this.opts()));
+            files++;
+          }
+        }
+      }
+    } catch (err) {
+      this.toast('无法读取拖入的内容');
+      e.setResult(DragResult.DRAG_FAILED);
+      return;
+    }
+    if (picks.length > 0) {
+      this.sendMedia(picks.slice(0, 10), '');
+    }
+    if (texts.length > 0) {
+      // Dropped text lands in the composer for review instead of being sent.
+      this.draft = `${this.draft}${this.draft ? ' ' : ''}${texts.join('\n')}`;
+    }
+    e.setResult(picks.length > 0 || texts.length > 0 || files > 0 ? DragResult.DRAG_SUCCESSFUL : DragResult.DRAG_FAILED);
   }
 
   // Reads width, height and duration so a video gets a proper player bubble.
@@ -892,8 +1171,37 @@ export struct ChatView {
     }
   }
 
-  vote(d: BubbleData, option: number): void {
-    this.store.vote(d.msg, [option]).catch((e: TdError) => this.toast(e.message));
+  vote(d: BubbleData, options: number[]): void {
+    this.store.vote(d.msg, options).catch((e: TdError) => this.toast(e.message));
+  }
+
+  // Comments of a channel post (they live in its discussion group) or the
+  // replies to a group message.
+  openThread(d: BubbleData): void {
+    this.store.thread(d.msg).then((info: TdObject) => {
+      this.nav.openThread(info['chat_id'] as number, info['message_thread_id'] as number,
+        d.msg.isChannelPost ? '评论' : '回复');
+    }).catch((e: TdError) => this.toast(`无法打开：${e.message}`));
+  }
+
+  retry(d: BubbleData): void {
+    this.store.resend(d.msg).catch((e: TdError) => this.toast(`重试失败：${e.message}`));
+  }
+
+  // Opens the system date picker and jumps to the first message of that day.
+  pickDate(): void {
+    this.getUIContext().showDatePickerDialog({
+      start: new Date(2013, 7, 1),
+      end: new Date(),
+      selected: new Date(),
+      onDateAccept: (value: Date) => {
+        const day = new Date(value.getFullYear(), value.getMonth(), value.getDate());
+        // The last message before midnight; the day's first follows it.
+        this.store.messageByDate(Math.floor(day.getTime() / 1000)).then((id: number) => {
+          this.jumpTo(id);
+        }).catch(() => this.toast('这一天之前没有消息'));
+      }
+    });
   }
 
   pressButton(d: BubbleData, b: InlineButton): void {
@@ -942,7 +1250,9 @@ export struct ChatView {
           }
         }).catch((e: TdError) => this.toast(e.message));
       });
-    } else if (t.chatId === this.chatId && t.messageId) {
+    } else if (t.botStart && t.chatId) {
+      this.nav.openChat(t.chatId, 0, t.startParam);
+    } else if (t.chatId === this.chatId && t.messageId && !this.threadId) {
       this.jumpTo(t.messageId);
     } else if (t.chatId) {
       this.nav.openChat(t.chatId, t.messageId);
@@ -1150,6 +1460,22 @@ export struct ChatView {
           this.store.pin(m, !pinned).catch((e: TdError) => this.toast(e.message));
         });
       }
+      if (m.failed && m.canRetry) {
+        add('重新发送', () => this.retry(d));
+      }
+      if (!this.threadId && !this.topicId && p['can_get_message_thread']) {
+        add(m.isChannelPost ? '查看评论' : '查看回复', () => this.openThread(d));
+      }
+      if (m.kind === 'sticker') {
+        add('添加到收藏的贴纸', () => {
+          this.store.favoriteSticker(m.fileId).then(() => this.toast('已收藏')).catch((e: TdError) => this.toast(e.message));
+        });
+      }
+      if (m.kind === 'animation') {
+        add('保存 GIF', () => {
+          this.store.saveAnimation(m.fileId).then(() => this.toast('已保存到 GIF')).catch((e: TdError) => this.toast(e.message));
+        });
+      }
       if (m.kind === 'voice' || m.kind === 'videoNote') {
         add('转换为文字', () => {
           this.store.recognizeSpeech(m).catch((e: TdError) => this.toast(e.message));
@@ -1256,6 +1582,13 @@ export struct ChatView {
       menu.items.push(new PanelItem(label, fn, danger));
     };
     add('搜索消息', () => this.openSearch(''));
+    if (this.threadId) {
+      this.showMenu(menu);
+      return;
+    }
+    if (!this.topicId) {
+      add('跳转到日期', () => this.pickDate());
+    }
     add(this.muted ? '取消静音' : '静音', () => {
       this.acc.mute(c, this.muted ? 0 : MUTE_FOREVER).catch(() => {});
     });
@@ -1314,7 +1647,9 @@ export struct ChatView {
       onAudio: (d: BubbleData) => this.playAudio(d),
       onSeek: (d: BubbleData, f: number) => this.audioPlayer.seek(f),
       onFile: (d: BubbleData) => this.openFile(d),
-      onVote: (d: BubbleData, i: number) => this.vote(d, i),
+      onVote: (d: BubbleData, options: number[]) => this.vote(d, options),
+      onThread: (d: BubbleData) => this.openThread(d),
+      onRetry: (d: BubbleData) => this.retry(d),
       onLocation: (d: BubbleData) => this.openLocation(d),
       onContact: (d: BubbleData) => this.openContact(d),
       onButton: (d: BubbleData, b: InlineButton) => this.pressButton(d, b),
@@ -1491,6 +1826,8 @@ export struct ChatView {
   Composer() {
     if (this.joinable) {
       this.BottomAction({ label: this.chat && this.chat.type === 'channel' ? '关注频道' : '加入群组', fn: () => this.joinChat() })
+    } else if (this.botStart && this.canSend) {
+      this.BottomAction({ label: '开始', fn: () => this.pressStart() })
     } else if (!this.canSend) {
       if (this.chat && this.chat.type === 'channel') {
         this.BottomAction({ label: this.muted ? '取消静音' : '静音', fn: () => {
@@ -1523,6 +1860,7 @@ export struct ChatView {
           .onClick(() => {
             this.showPanel = !this.showPanel;
             this.showAttach = false;
+            this.showKeyboard = false;
             if (this.showPanel) {
               this.input.stopEditing();
             }
@@ -1532,6 +1870,12 @@ export struct ChatView {
           .layoutWeight(1)
           .constraintSize({ maxHeight: Math.min(140, Math.max(60, this.paneH * 0.3)) })
           .onChange((v: string) => this.onDraftChange(v))
+          .onTextSelectionChange((start: number, end: number) => {
+            this.caret = end;
+            if (this.suggestions.length > 0 || this.draft.includes('@') || this.draft.startsWith('/')) {
+              this.suggest();
+            }
+          })
           .onFocus(() => { this.closePanels(); })
           // A hardware keyboard sends with Enter; Shift+Enter starts a new line.
           .onKeyPreIme((e: KeyEvent): boolean => {
@@ -1557,10 +1901,22 @@ export struct ChatView {
               }
             }))
         } else {
+          if (this.keyboard.length > 0) {
+            Button(this.showKeyboard ? '⌄' : '⌘', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(18)
+              .onClick(() => {
+                this.showKeyboard = !this.showKeyboard;
+                this.showAttach = false;
+                this.showPanel = false;
+                if (this.showKeyboard) {
+                  this.input.stopEditing();
+                }
+              })
+          }
           Button('📎', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(20)
             .onClick(() => {
               this.showAttach = !this.showAttach;
               this.showPanel = false;
+              this.showKeyboard = false;
               if (this.showAttach) {
                 this.input.stopEditing();
               }
@@ -1570,6 +1926,59 @@ export struct ChatView {
       }
       .padding({ left: 2, right: 2, top: 4, bottom: 4 })
       .width('100%')
+    }
+  }
+
+  // Members to mention or bot commands matching what is being typed.
+  @Builder
+  Suggestions() {
+    if (this.suggestions.length > 0) {
+      List() {
+        ForEach(this.suggestions, (s: Suggestion) => {
+          ListItem() {
+            Row({ space: 10 }) {
+              if (!s.command) {
+                Avatar({ title: s.title, seed: s.userId || s.title.length, path: s.photo, side: 30 })
+              }
+              Text(s.title).fontSize(15).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                .fontColor(s.command ? $r('app.color.link') : $r('app.color.text_primary'))
+              Text(s.detail).fontSize(13).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                .fontColor($r('app.color.text_secondary')).layoutWeight(1)
+            }
+            .padding({ left: 14, right: 14, top: 7, bottom: 7 })
+            .width('100%')
+            .onClick(() => this.pickSuggestion(s))
+          }
+        }, (s: Suggestion) => `${s.insert}|${s.userId}|${s.photo}`)
+      }
+      .width('100%')
+      .constraintSize({ maxHeight: Math.min(200, Math.max(90, this.paneH * 0.3)) })
+      .backgroundColor($r('app.color.page_bg'))
+      .border({ width: { top: 0.5 }, color: $r('app.color.separator') })
+    }
+  }
+
+  // Buttons a bot offers instead of typing; tapping one sends its text.
+  @Builder
+  BotKeyboard() {
+    if (this.showKeyboard && this.keyboard.length > 0) {
+      Scroll() {
+        Column({ space: 6 }) {
+          ForEach(this.keyboard, (row: string[], ri: number) => {
+            Row({ space: 6 }) {
+              ForEach(row, (label: string, i: number) => {
+                Button(label, { buttonStyle: ButtonStyleMode.NORMAL }).fontSize(14).height(40).layoutWeight(1)
+                  .borderRadius(8).onClick(() => this.pressKey(label))
+              }, (label: string, i: number) => `${ri}|${i}|${label}`)
+            }
+            .width('100%')
+          }, (row: string[], ri: number) => `${ri}|${row.join('|')}`)
+        }
+        .padding(8)
+      }
+      .width('100%')
+      .constraintSize({ maxHeight: panelHeight(this.paneH) })
+      .backgroundColor($r('app.color.page_alt'))
     }
   }
 
@@ -1675,8 +2084,24 @@ export struct ChatView {
                 bubbleMax: bubbleMaxWidth(this.paneW), mediaW: mediaWidth(this.paneW),
                 mediaH: mediaMaxHeight(this.paneH), stickerSide: stickerSide(this.paneW)
               })
+                .translate({ x: this.swipeId === b.id ? this.swipeX : 0 })
             }
             .width('100%')
+            // Drag a message to the left to reply to it.
+            .gesture(PanGesture({ direction: PanDirection.Left, distance: 12 })
+              .onActionStart(() => {
+                if (this.canSwipeReply(b)) {
+                  this.swipeId = b.id;
+                  this.swipeX = 0;
+                }
+              })
+              .onActionUpdate((e: GestureEvent) => {
+                if (this.swipeId === b.id) {
+                  this.swipeX = Math.max(-72, Math.min(0, e.offsetX * 0.6));
+                }
+              })
+              .onActionEnd(() => this.endSwipe(b, true))
+              .onActionCancel(() => this.endSwipe(b, false)))
           }
         }, (b: BubbleData) => b.key)
       }
@@ -1718,6 +2143,30 @@ export struct ChatView {
         .hitTestBehavior(HitTestMode.None)
       }
 
+      if (this.mentionCount > 0) {
+        Stack({ alignContent: Alignment.Top }) {
+          Text('@').fontSize(20).width(44).height(44).textAlign(TextAlign.Center).borderRadius(22)
+            .fontColor($r('app.color.accent')).backgroundColor($r('app.color.card'))
+            .shadow({ radius: 6, color: '#33000000' }).margin({ top: 8 })
+          Text(String(this.mentionCount)).fontSize(11).fontColor(Color.White).padding({ left: 6, right: 6 }).height(18)
+            .borderRadius(9).backgroundColor($r('app.color.accent'))
+        }
+        .margin({ right: 14, bottom: this.showScrollDown ? 78 : 14 })
+        .onClick(() => this.nextMention())
+      }
+
+      if (this.dropping) {
+        Column() {
+          Text('松开发送到此聊天').fontSize(16).fontColor(Color.White).padding({ left: 18, right: 18, top: 10, bottom: 10 })
+            .borderRadius(18).backgroundColor($r('app.color.accent'))
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor($r('app.color.scrim'))
+        .hitTestBehavior(HitTestMode.None)
+      }
+
       if (this.showScrollDown) {
         Stack({ alignContent: Alignment.Top }) {
           Text('⌄').fontSize(26).width(44).height(44).textAlign(TextAlign.Center).borderRadius(22)
@@ -1735,6 +2184,37 @@ export struct ChatView {
     .layoutWeight(1)
     .width('100%')
     .backgroundColor($r('app.color.chat_bg'))
+    // Photos, videos, files and text dragged in from another window.
+    .allowDrop([uniformTypeDescriptor.UniformDataType.IMAGE, uniformTypeDescriptor.UniformDataType.VIDEO,
+      uniformTypeDescriptor.UniformDataType.FILE, uniformTypeDescriptor.UniformDataType.PLAIN_TEXT,
+      uniformTypeDescriptor.UniformDataType.HYPERLINK])
+    .onDragEnter(() => { this.dropping = this.canSend && !this.joinable; })
+    .onDragLeave(() => { this.dropping = false; })
+    .onDrop((e: DragEvent) => this.handleDrop(e))
+  }
+
+  private canSwipeReply(b: BubbleData): boolean {
+    return this.canSend && !this.joinable && this.selected.length === 0 && b.msg.kind !== 'service' &&
+      !b.msg.pending && !b.msg.failed;
+  }
+
+  private endSwipe(b: BubbleData, commit: boolean): void {
+    if (this.swipeId !== b.id) {
+      return;
+    }
+    const far = this.swipeX <= -48;
+    animateTo({ duration: 140 }, () => {
+      this.swipeX = 0;
+    });
+    setTimeout((): void => {
+      if (this.swipeId === b.id) {
+        this.swipeId = 0;
+      }
+    }, 160);
+    if (commit && far) {
+      this.editing = null;
+      this.replyTo = b.msg;
+    }
   }
 
   build() {
@@ -1770,8 +2250,10 @@ export struct ChatView {
           this.SearchPanel()
         } else {
           Column() {
+            this.Suggestions()
             this.ComposerBanner()
             this.Composer()
+            this.BotKeyboard()
             this.AttachMenu()
             if (this.showPanel) {
               StickerPanel({

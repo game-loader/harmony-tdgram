@@ -25,8 +25,8 @@ export struct ChatPane {
     this.route.controller.back = (): boolean => this.handleBack();
     this.route.controller.jumpTo = (id: number): void => this.inner.jumpTo(id);
     const c = this.acc.chat(this.route.chatId);
-    // Jumping to a specific message shows it in the whole-chat history.
-    if (!c || c.type !== 'supergroup' || this.route.messageId) {
+    // A comment thread, or a jump to a specific message, skips the topic list.
+    if (!c || c.type !== 'supergroup' || this.route.messageId || this.route.threadId) {
       this.resolved = true;
       return;
     }
@@ -97,6 +97,9 @@ export struct ChatPane {
         ChatView({
           chatId: this.route.chatId,
           messageId: this.route.messageId,
+          threadId: this.route.threadId,
+          threadTitle: this.route.threadId ? this.route.title : '',
+          startParam: this.route.startParam,
           nav: this.nav,
           showBack: this.showBack,
           active: this.active,

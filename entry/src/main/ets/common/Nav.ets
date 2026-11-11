@@ -19,8 +19,10 @@ export class Route {
   chatId: number = 0;
   messageId: number = 0;
   topicId: number = 0;
+  threadId: number = 0; // chat routes: comments or reply thread shown instead of the chat
   userId: number = 0;
   secretChatId: number = 0;
+  startParam: string = ''; // chat routes: bot deep-link parameter for "Start"
   title: string = '';
   controller: RouteController = new RouteController();
 }
@@ -45,18 +47,33 @@ export class Nav {
     this.onChange();
   }
 
+  // A route showing the chat itself (not one of its comment threads).
+  private isChat(r: Route, chatId: number): boolean {
+    return r.kind === 'chat' && r.chatId === chatId && !r.threadId;
+  }
+
+  // Comments of a channel post or a reply thread, on top of the current route.
+  openThread(chatId: number, threadId: number, title: string): void {
+    const r = this.make('chat');
+    r.chatId = chatId;
+    r.threadId = threadId;
+    r.title = title;
+    this.stack.push(r);
+    this.changed();
+  }
+
   top(): Route | undefined {
     return this.stack.length > 0 ? this.stack[this.stack.length - 1] : undefined;
   }
 
   // The chat the stack started from, highlighted in the chat list.
   rootChatId(): number {
-    return this.stack.length > 0 && this.stack[0].kind === 'chat' ? this.stack[0].chatId : 0;
+    return this.stack.length > 0 && this.stack[0].kind === 'chat' && !this.stack[0].threadId ? this.stack[0].chatId : 0;
   }
 
   // Chosen from the chat list: replaces whatever was open.
   openRootChat(chatId: number, messageId: number = 0): void {
-    if (this.stack.length === 1 && this.stack[0].kind === 'chat' && this.stack[0].chatId === chatId && !messageId) {
+    if (this.stack.length === 1 && this.isChat(this.stack[0], chatId) && !messageId) {
       return;
     }
     const r = this.make('chat');
@@ -67,13 +84,13 @@ export class Nav {
   }
 
   // Opened from inside another route (profile, link, contact).
-  openChat(chatId: number, messageId: number = 0): void {
+  openChat(chatId: number, messageId: number = 0, startParam: string = ''): void {
     const n = this.stack.length;
-    if (!messageId && n > 0 && this.stack[n - 1].kind === 'chat' && this.stack[n - 1].chatId === chatId) {
+    if (!messageId && n > 0 && this.isChat(this.stack[n - 1], chatId)) {
       return;
     }
     // Going back to the chat we came from pops instead of stacking it again.
-    if (n > 1 && this.stack[n - 2].kind === 'chat' && this.stack[n - 2].chatId === chatId) {
+    if (n > 1 && this.isChat(this.stack[n - 2], chatId)) {
       const target = this.stack[n - 2];
       this.stack.pop();
       this.changed();
@@ -85,6 +102,7 @@ export class Nav {
     const r = this.make('chat');
     r.chatId = chatId;
     r.messageId = messageId;
+    r.startParam = startParam;
     this.stack.push(r);
     this.changed();
   }
@@ -93,7 +111,7 @@ export class Nav {
   replaceWithChat(chatId: number): void {
     this.stack.pop();
     const t = this.top();
-    if (!t || t.kind !== 'chat' || t.chatId !== chatId) {
+    if (!t || !this.isChat(t, chatId)) {
       const r = this.make('chat');
       r.chatId = chatId;
       this.stack.push(r);

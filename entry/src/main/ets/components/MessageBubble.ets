@@ -38,6 +38,8 @@ export class BubbleData {
   autoplay: boolean = true;
   dayLabel: string = '';
   unreadDivider: boolean = false; // "unread messages" line above this bubble
+  mapPath: string = '';   // map image of a location message
+  canThread: boolean = false; // show the comments / replies row
   // Albums: every item, in order. `msg` is the item carrying the caption.
   album: AlbumItem[] = [];
   key: string = '';
@@ -50,7 +52,7 @@ export class BubbleData {
     this.id = this.msg.id;
     this.key = [this.msg.id, this.msg.version, this.filePath, this.thumbPath, this.progress, this.replyText,
       this.read, this.playing, Math.round(this.playPos * 100), this.translated, this.selected, this.showSender,
-      this.senderName, this.dayLabel, this.highlight, this.unreadDivider].join('|') +
+      this.senderName, this.dayLabel, this.highlight, this.unreadDivider, this.mapPath, this.canThread].join('|') +
     this.album.map((a: AlbumItem) => `#${a.msg.id}.${a.msg.version}.${a.filePath}.${a.thumbPath}.${a.progress}`).join('');
     return this;
   }
@@ -67,7 +69,9 @@ export interface BubbleActions {
   onAudio: (d: BubbleData) => void;
   onSeek: (d: BubbleData, fraction: number) => void;
   onFile: (d: BubbleData) => void;
-  onVote: (d: BubbleData, option: number) => void;
+  onVote: (d: BubbleData, options: number[]) => void;
+  onThread: (d: BubbleData) => void;
+  onRetry: (d: BubbleData) => void;
   onLocation: (d: BubbleData) => void;
   onContact: (d: BubbleData) => void;
   onButton: (d: BubbleData, b: InlineButton) => void;
@@ -106,6 +110,7 @@ export struct MessageBubble {
   @Prop mediaW: number = 240;
   @Prop mediaH: number = 320;
   @Prop stickerSide: number = 180;
+  @State picked: number[] = []; // options ticked in a multiple-choice poll, before voting
 
   // ---- Header pieces ----
 
@@ -411,7 +416,8 @@ export struct MessageBubble {
       ForEach(this.data.msg.pollOptions, (op: PollOptionItem, i: number) => {
         Column({ space: 2 }) {
           Row() {
-            Text(`${op.chosen ? '✓ ' : ''}${op.text}`).fontSize(14).layoutWeight(1).fontColor($r('app.color.text_primary'))
+            Text(`${op.chosen || this.picked.includes(i) ? '✓ ' : ''}${op.text}`).fontSize(14).layoutWeight(1)
+              .fontColor($r('app.color.text_primary'))
             if (this.data.msg.pollVoted || this.data.msg.pollClosed) {
               Text(`${op.percent}%`).fontSize(13).fontColor($r('app.color.bubble_meta'))
             }
@@ -423,14 +429,25 @@ export struct MessageBubble {
         .width('100%')
         .padding(6)
         .borderRadius(6)
-        .backgroundColor($r('app.color.inset'))
+        .backgroundColor(this.picked.includes(i) ? $r('app.color.accent_soft') : $r('app.color.inset'))
         .onClick(() => {
-          if (!this.data.msg.pollVoted && !this.data.msg.pollClosed) {
-            this.actions?.onVote(this.data, i);
+          if (this.data.msg.pollVoted || this.data.msg.pollClosed) {
+            return;
+          }
+          if (this.data.msg.pollMultiple) {
+            this.picked = this.picked.includes(i) ? this.picked.filter((x: number) => x !== i) : this.picked.concat([i]);
+          } else {
+            this.actions?.onVote(this.data, [i]);
           }
         })
       }, (op: PollOptionItem, i: number) => `${i}|${op.voters}|${op.chosen}`)
-      Text(`${this.data.msg.pollTotal} 人参与`).fontSize(12).fontColor($r('app.color.bubble_meta'))
+      if (this.data.msg.pollMultiple && !this.data.msg.pollVoted && !this.data.msg.pollClosed) {
+        Button('投票', { buttonStyle: ButtonStyleMode.NORMAL }).height(32).fontSize(13).width('100%')
+          .enabled(this.picked.length > 0)
+          .onClick(() => this.actions?.onVote(this.data, this.picked.slice().sort((a: number, b: number) => a - b)))
+      }
+      Text(`${this.data.msg.pollTotal} 人参与${this.data.msg.pollMultiple ? ' · 可多选' : ''}`).fontSize(12)
+        .fontColor($r('app.color.bubble_meta'))
     }
     .alignItems(HorizontalAlign.Start)
     .width(this.mediaW)
@@ -440,9 +457,12 @@ export struct MessageBubble {
   Location() {
     Column({ space: 4 }) {
       Stack() {
-        Text('📍').fontSize(40)
+        if (this.data.mapPath) {
+          Image('file://' + this.data.mapPath).width('100%').height('100%').objectFit(ImageFit.Cover)
+        }
+        Text('📍').fontSize(this.data.mapPath ? 30 : 40)
       }
-      .width(this.mediaW).height(120).borderRadius(8).backgroundColor($r('app.color.inset'))
+      .width(this.mediaW).height(130).borderRadius(8).backgroundColor($r('app.color.inset')).clip(true)
       if (this.data.msg.title) {
         Text(this.data.msg.title).fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
       }
@@ -571,13 +591,39 @@ export struct MessageBubble {
         Text('已编辑').fontSize(11).fontColor($r('app.color.bubble_meta'))
       }
       Text(formatTime(this.data.msg.date)).fontSize(11).fontColor($r('app.color.bubble_meta'))
-      if (this.data.msg.outgoing) {
-        Text(this.data.msg.failed ? '⚠' : (this.data.msg.pending ? '🕓' : (this.data.read ? '✓✓' : '✓')))
-          .fontSize(11).fontColor(this.data.msg.failed ? $r('app.color.danger') : $r('app.color.tick'))
+      if (this.data.msg.outgoing && this.data.msg.failed) {
+        Text(this.data.msg.canRetry ? '⚠ 发送失败，点击重试' : '⚠ 发送失败').fontSize(11).fontColor($r('app.color.danger'))
+          .onClick(() => {
+            if (this.data.msg.canRetry) {
+              this.actions?.onRetry(this.data);
+            }
+          })
+      } else if (this.data.msg.outgoing) {
+        Text(this.data.msg.pending ? '🕓' : (this.data.read ? '✓✓' : '✓')).fontSize(11).fontColor($r('app.color.tick'))
       }
     }
     // Hug the content: a full-width footer would stretch every bubble.
     .alignSelf(ItemAlign.End)
+  }
+
+  // Comments under a channel post, or the replies to a group message.
+  @Builder
+  ThreadRow() {
+    if (this.data.canThread) {
+      Row({ space: 6 }) {
+        Text(this.data.msg.replyCount > 0 ? `💬 ${this.data.msg.replyCount} 条${this.data.msg.isChannelPost ? '评论' : '回复'}` :
+          '💬 发表评论').fontSize(13).fontColor($r('app.color.link')).layoutWeight(1)
+        Text('›').fontSize(15).fontColor($r('app.color.link'))
+      }
+      .width(this.threadW())
+      .padding({ top: 6, bottom: 2 })
+      .border({ width: { top: 0.5 }, color: { top: $r('app.color.separator') } })
+      .onClick(() => this.tapOr(() => this.actions?.onThread(this.data)))
+    }
+  }
+
+  private threadW(): number {
+    return this.data.album.length > 0 ? this.albumW() : Math.min(this.mediaW, this.bubbleMax - 20);
   }
 
   @Builder
@@ -665,6 +711,7 @@ export struct MessageBubble {
           }
           this.Buttons()
           this.Reactions()
+          this.ThreadRow()
           this.Footer()
         }
         .alignItems(HorizontalAlign.Start)

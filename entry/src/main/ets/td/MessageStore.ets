@@ -39,6 +39,8 @@ export class MessageStore {
   private nameOf: NameOf;
   chatId: number = 0;
   topicId: number = 0; // forum topic being viewed, 0 for the whole chat
+  // Comments of a channel post or a reply thread: id of the thread in chatId.
+  threadId: number = 0;
   messages: MsgItem[] = []; // ascending by id
   olderDone: boolean = false;
   // False after jumping to an old message: newer pages must be loaded.
@@ -103,6 +105,9 @@ export class MessageStore {
   }
 
   private topic(): TdObject | null {
+    if (this.threadId) {
+      return o({ '@type': 'messageTopicThread', 'message_thread_id': this.threadId });
+    }
     return this.topicId ? o({ '@type': 'messageTopicForum', 'forum_topic_id': this.topicId }) : null;
   }
 
@@ -112,9 +117,10 @@ export class MessageStore {
   }
 
   // Targets a chat for sends and searches without opening it.
-  bind(chatId: number, topicId: number = 0, secret: boolean = false): MessageStore {
+  bind(chatId: number, topicId: number = 0, secret: boolean = false, threadId: number = 0): MessageStore {
     this.chatId = chatId;
     this.topicId = topicId;
+    this.threadId = threadId;
     this.secret = secret;
     return this;
   }
@@ -125,7 +131,9 @@ export class MessageStore {
     this.opened = true;
     this.secret = opt.secret;
     this.core.td.send(o({ '@type': 'openChat', 'chat_id': this.chatId })).catch(() => {});
-    this.refreshPinned();
+    if (!this.threadId) {
+      this.refreshPinned();
+    }
     if (opt.messageId) {
       this.loadAround(opt.messageId, 0);
     } else if (opt.unread > 0 && opt.lastReadId > 0) {
@@ -166,7 +174,9 @@ export class MessageStore {
   }
 
   private history(from: number, offset: number, limit: number): Promise<TdObject[]> {
-    const req = this.topicId ?
+    const req = this.threadId ?
+      o({ '@type': 'getMessageThreadHistory', 'chat_id': this.chatId, 'message_id': this.threadId,
+        'from_message_id': from, 'offset': offset, 'limit': limit }) : this.topicId ?
       o({ '@type': 'getForumTopicHistory', 'chat_id': this.chatId, 'forum_topic_id': this.topicId,
         'from_message_id': from, 'offset': offset, 'limit': limit }) :
       o({ '@type': 'getChatHistory', 'chat_id': this.chatId, 'from_message_id': from,
@@ -310,7 +320,8 @@ export class MessageStore {
     }
     this.core.td.send(o({
       '@type': 'viewMessages', 'chat_id': this.chatId, 'message_ids': ids,
-      'source': o({ '@type': this.topicId ? 'messageSourceForumTopicHistory' : 'messageSourceChatHistory' }),
+      'source': o({ '@type': this.threadId ? 'messageSourceMessageThreadHistory' :
+        (this.topicId ? 'messageSourceForumTopicHistory' : 'messageSourceChatHistory') }),
       'force_read': false
     })).catch(() => {});
   }
@@ -366,20 +377,49 @@ export class MessageStore {
     return this.core.td.send(req);
   }
 
-  // Text is parsed as Markdown (**bold**, __italic__, `code`, [link](url)...).
+  // Text is parsed as Markdown (**bold**, __italic__, `code`, ~~strike~~,
+  // ||spoiler||, [link](url)). This is the lenient client-side flavour: text
+  // that is not valid markup is kept as written instead of being rejected.
   formatted(text: string): Promise<TdObject> {
-    return this.core.td.send(o({
-      '@type': 'parseTextEntities', 'text': text, 'parse_mode': o({ '@type': 'textParseModeMarkdown', 'version': 2 })
-    })).catch(() => o({ '@type': 'formattedText', 'text': text, 'entities': [] }));
+    return this.core.td.send(o({ '@type': 'parseMarkdown', 'text': this.plain(text) }))
+      .catch(() => this.plain(text));
+  }
+
+  // Marks every occurrence of a picked member's name as a mention of them.
+  private withMentions(f: TdObject, mentions: Map<string, number>): TdObject {
+    if (mentions.size === 0) {
+      return f;
+    }
+    const text = f['text'] as string;
+    const entities = ((f['entities'] as TdObject[]) ?? []).slice();
+    mentions.forEach((userId: number, name: string) => {
+      let at = name ? text.indexOf(name) : -1;
+      while (at >= 0) {
+        // Only where the name stands as a word of its own.
+        const before = at === 0 || /\s/.test(text.charAt(at - 1));
+        const after = at + name.length === text.length || /\s/.test(text.charAt(at + name.length));
+        if (!before || !after) {
+          at = text.indexOf(name, at + name.length);
+          continue;
+        }
+        entities.push(o({ '@type': 'textEntity', 'offset': at, 'length': name.length,
+          'type': o({ '@type': 'textEntityTypeMentionName', 'user_id': userId }) }));
+        at = text.indexOf(name, at + name.length);
+      }
+    });
+    return o({ '@type': 'formattedText', 'text': text, 'entities': entities });
   }
 
   private plain(text: string): TdObject {
     return o({ '@type': 'formattedText', 'text': text, 'entities': [] });
   }
 
-  sendText(text: string, opts: SendOptions, markdown: boolean): Promise<TdObject> {
+  // mentions: display name -> user id, for members picked from the @ list
+  // who have no username.
+  sendText(text: string, opts: SendOptions, markdown: boolean, mentions: Map<string, number> = new Map()): Promise<TdObject> {
     const p = markdown ? this.formatted(text) : Promise.resolve(this.plain(text));
-    return p.then((f: TdObject) => this.send(o({ '@type': 'inputMessageText', 'text': f, 'clear_draft': true }), opts));
+    return p.then((f: TdObject) => this.send(o({ '@type': 'inputMessageText', 'text': this.withMentions(f, mentions),
+      'clear_draft': true }), opts));
   }
 
   private local(path: string): TdObject {
@@ -587,6 +627,58 @@ export class MessageStore {
       'to_language_code': lang })).then((r: TdObject) => r['text'] as string);
   }
 
+  // Sends a failed message again.
+  resend(m: MsgItem): Promise<TdObject> {
+    return this.core.td.send(o({ '@type': 'resendMessages', 'chat_id': m.chatId, 'message_ids': [m.id] }));
+  }
+
+  // Comments of a channel post, or the replies to a group message: resolves
+  // TDLib's messageThreadInfo (chat_id and message_thread_id of the thread).
+  thread(m: MsgItem): Promise<TdObject> {
+    return this.core.td.send(o({ '@type': 'getMessageThread', 'chat_id': m.chatId, 'message_id': m.id }));
+  }
+
+  // Id of the last message sent no later than `date` (unix seconds).
+  messageByDate(date: number): Promise<number> {
+    return this.core.td.send(o({ '@type': 'getChatMessageByDate', 'chat_id': this.chatId, 'date': date }))
+      .then((m: TdObject) => m['id'] as number);
+  }
+
+  // User ids of chat members matching `query`, for @ suggestions.
+  searchMembers(query: string): Promise<number[]> {
+    return this.core.td.send(o({ '@type': 'searchChatMembers', 'chat_id': this.chatId, 'query': query, 'limit': 8 }))
+      .then((r: TdObject) => {
+        const ids: number[] = [];
+        for (const m of (r['members'] as TdObject[]) ?? []) {
+          const sender = m['member_id'] as TdObject;
+          if (sender['@type'] === 'messageSenderUser') {
+            ids.push(sender['user_id'] as number);
+          }
+        }
+        return ids;
+      });
+  }
+
+  // Tells TDLib a one-time bot keyboard was used, so it is not offered again.
+  keyboardUsed(messageId: number): void {
+    this.core.td.send(o({ '@type': 'deleteChatReplyMarkup', 'chat_id': this.chatId, 'message_id': messageId }))
+      .catch(() => {});
+  }
+
+  // Presses "Start" in a chat with a bot.
+  startBot(botUserId: number, parameter: string): Promise<TdObject> {
+    return this.core.td.send(o({ '@type': 'sendBotStartMessage', 'bot_user_id': botUserId, 'chat_id': this.chatId,
+      'parameter': parameter }));
+  }
+
+  favoriteSticker(fileId: number): Promise<TdObject> {
+    return this.core.td.send(o({ '@type': 'addFavoriteSticker', 'sticker': o({ '@type': 'inputFileId', 'id': fileId }) }));
+  }
+
+  saveAnimation(fileId: number): Promise<TdObject> {
+    return this.core.td.send(o({ '@type': 'addSavedAnimation', 'animation': o({ '@type': 'inputFileId', 'id': fileId }) }));
+  }
+
   // Marks self-destructing or listened-to content as opened (starts timers).
   markOpened(m: MsgItem): void {
     this.core.td.send(o({ '@type': 'openMessageContent', 'chat_id': m.chatId, 'message_id': m.id })).catch(() => {});
@@ -638,7 +730,12 @@ export class MessageStore {
     if ((raw['chat_id'] as number) !== this.chatId) {
       return;
     }
-    if (this.topicId) {
+    if (this.threadId) {
+      const t = raw['topic_id'] as TdObject | undefined;
+      if (!t || t['@type'] !== 'messageTopicThread' || (t['message_thread_id'] as number) !== this.threadId) {
+        return;
+      }
+    } else if (this.topicId) {
       const t = raw['topic_id'] as TdObject | undefined;
       if (!t || t['@type'] !== 'messageTopicForum' || (t['forum_topic_id'] as number) !== this.topicId) {
         return;

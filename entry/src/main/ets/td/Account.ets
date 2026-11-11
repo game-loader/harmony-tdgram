@@ -6,7 +6,7 @@ import { ChatStore } from './ChatStore';
 import { FileStore } from './FileStore';
 import { MessageStore, OpenOptions } from './MessageStore';
 import { o, TdClient, TdObject } from './TdClient';
-import { ChatItem, MsgItem, UserItem } from './Models';
+import { BotCmd, ChatItem, MsgItem, UserItem } from './Models';
 import { ProxyConfig } from './Proxy';
 
 export type ConnectionState = 'waiting' | 'proxy' | 'connecting' | 'updating' | 'ready';
@@ -17,6 +17,8 @@ export class LinkTarget {
   invite: string = '';       // invite link that still has to be joined
   inviteTitle: string = '';
   proxy: ProxyConfig | null = null;
+  botStart: boolean = false; // a bot to start with startParam
+  startParam: string = '';
 }
 
 export type AuthStep = 'loading' | 'phone' | 'code' | 'password' | 'qr' | 'email' | 'ready' | 'closed';
@@ -40,6 +42,8 @@ export class Account implements AccountCore {
   // One store per chat view currently on screen.
   private sessions: MessageStore[] = [];
   private nameOf: (id: number, isChat: boolean) => string;
+  private mapFiles: Map<string, number> = new Map(); // "lat,lon" -> map image file id
+  private mapAsked: Set<string> = new Set();
   private listeners: AccountListener[] = [];
   private batchTimer: number = -1;
   private pendingEvents: Set<AccountEvent> = new Set();
@@ -85,16 +89,72 @@ export class Account implements AccountCore {
   }
 
   // A store targeting a chat for sends and searches; no history is loaded.
-  store(chatId: number, topicId: number = 0): MessageStore {
+  store(chatId: number, topicId: number = 0, threadId: number = 0): MessageStore {
     const c = this.chats.chats.get(chatId);
-    return new MessageStore(this, this.nameOf).bind(chatId, topicId, c !== undefined && c.type === 'secret');
+    return new MessageStore(this, this.nameOf).bind(chatId, topicId, c !== undefined && c.type === 'secret', threadId);
+  }
+
+  // File id of a map image for a location message, 0 until TDLib has made
+  // one; 'files' is emitted when it becomes available.
+  mapFile(lat: number, lon: number, chatId: number): number {
+    const key = `${lat.toFixed(5)},${lon.toFixed(5)}`;
+    const known = this.mapFiles.get(key);
+    if (known !== undefined) {
+      return known;
+    }
+    if (!this.mapAsked.has(key)) {
+      this.mapAsked.add(key);
+      this.td.send(o({ '@type': 'getMapThumbnailFile',
+        'location': o({ '@type': 'location', 'latitude': lat, 'longitude': lon, 'horizontal_accuracy': 0 }),
+        'zoom': 15, 'width': 480, 'height': 240, 'scale': 2, 'chat_id': chatId })).then((f: TdObject) => {
+        this.mapFiles.set(key, f['id'] as number);
+        this.emit('files');
+      }).catch(() => {});
+    }
+    return 0;
+  }
+
+  // Commands of the bots in a chat, listed when the user types '/'.
+  botCommands(c: ChatItem): Promise<BotCmd[]> {
+    const make = (raw: TdObject, bot: string): BotCmd => {
+      const cmd = new BotCmd();
+      cmd.command = raw['command'] as string;
+      cmd.description = (raw['description'] as string) ?? '';
+      cmd.bot = bot;
+      return cmd;
+    };
+    if (c.type === 'private') {
+      const u = this.chats.users.get(c.userId);
+      if (!u || !u.isBot) {
+        return Promise.resolve([]);
+      }
+      return this.td.send(o({ '@type': 'getUserFullInfo', 'user_id': c.userId })).then((f: TdObject) => {
+        const info = f['bot_info'] as TdObject | undefined;
+        return info ? ((info['commands'] as TdObject[]) ?? []).map((raw: TdObject) => make(raw, '')) : [];
+      });
+    }
+    if (c.type !== 'group' && c.type !== 'supergroup') {
+      return Promise.resolve([]);
+    }
+    const req = c.type === 'group' ? o({ '@type': 'getBasicGroupFullInfo', 'basic_group_id': c.groupId }) :
+      o({ '@type': 'getSupergroupFullInfo', 'supergroup_id': c.groupId });
+    return this.td.send(req).then((f: TdObject) => {
+      const out: BotCmd[] = [];
+      for (const set of (f['bot_commands'] as TdObject[]) ?? []) {
+        const bot = this.chats.users.get(set['bot_user_id'] as number);
+        for (const raw of (set['commands'] as TdObject[]) ?? []) {
+          out.push(make(raw, bot ? bot.username : ''));
+        }
+      }
+      return out;
+    });
   }
 
   // Opens a chat (or one forum topic) for a view. Pair with closeSession.
-  openSession(chatId: number, topicId: number, opt: OpenOptions): MessageStore {
+  openSession(chatId: number, topicId: number, opt: OpenOptions, threadId: number = 0): MessageStore {
     const c = this.chats.chats.get(chatId);
     opt.secret = c !== undefined && c.type === 'secret';
-    const s = new MessageStore(this, this.nameOf).bind(chatId, topicId, opt.secret);
+    const s = new MessageStore(this, this.nameOf).bind(chatId, topicId, opt.secret, threadId);
     this.sessions.push(s);
     s.start(opt);
     return s;
@@ -215,7 +275,7 @@ export class Account implements AccountCore {
       'system_language_code': 'zh',
       'device_model': deviceInfo.marketName || deviceInfo.productModel || 'HarmonyOS',
       'system_version': deviceInfo.displayVersion || 'HarmonyOS',
-      'application_version': '0.3.0'
+      'application_version': '0.4.0'
     })).catch((e: Error) => {
       this.authHint = `初始化失败：${e.message}`;
       this.emit('auth');
@@ -365,6 +425,14 @@ export class Account implements AccountCore {
             target.messageId = m ? m['id'] as number : 0;
             return target;
           });
+        case 'internalLinkTypeBotStart':
+          return this.td.send(o({ '@type': 'searchPublicChat', 'username': t['bot_username'] as string }))
+            .then((c: TdObject) => {
+              target.chatId = c['id'] as number;
+              target.botStart = true;
+              target.startParam = (t['start_parameter'] as string) ?? '';
+              return target;
+            });
         case 'internalLinkTypeProxy': {
           const p = t['proxy'] as TdObject | undefined;
           target.proxy = p ? ProxyConfig.fromTd(p) : null;

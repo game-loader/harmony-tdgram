@@ -34,6 +34,14 @@ export class ChatItem {
   draft: string = '';
   autoDeleteTime: number = 0;
   canSend: boolean = true;
+  replyMarkupId: number = 0; // message carrying the bot's reply keyboard, 0 when none
+}
+
+// A command a bot offers, listed when the user types '/'.
+export class BotCmd {
+  command: string = '';
+  description: string = '';
+  bot: string = ''; // bot username, set in groups where the command must be addressed
 }
 
 // A topic of a forum supergroup.
@@ -153,6 +161,7 @@ export class MsgItem {
   pollClosed: boolean = false;
   pollQuiz: boolean = false;
   pollVoted: boolean = false;
+  pollMultiple: boolean = false;
   // Location, venue, contact, dice, call
   lat: number = 0;
   lon: number = 0;
@@ -164,6 +173,14 @@ export class MsgItem {
   callMissed: boolean = false;
   reactions: ReactionItem[] = [];
   buttons: InlineButton[][] = [];
+  // Bot reply keyboard: rows of button texts that are sent when tapped.
+  keyboard: string[][] = [];
+  keyboardOneTime: boolean = false;
+  // Comments of a channel post or replies in a group thread.
+  isChannelPost: boolean = false;
+  hasThread: boolean = false;
+  replyCount: number = 0;
+  canRetry: boolean = false; // a failed message that can be sent again
   // Bumped on every in-place change so ForEach keys re-render the row.
   version: number = 0;
 }

@@ -263,3 +263,17 @@ test('nav: replacing a picker with the chat underneath does not duplicate it', (
   assert.deepEqual(nav.stack.map((r) => r.kind), ['chat']);
   assert.equal(changes, 1);
 });
+
+test('nav: a comment thread is its own route, distinct from its chat', () => {
+  const nav = new Nav();
+  nav.openRootChat(1);
+  nav.openThread(50, 9000, '评论');   // comments live in discussion group 50
+  assert.deepEqual(nav.stack.map((r) => `${r.chatId}/${r.threadId}`), ['1/0', '50/9000']);
+  nav.openChat(50);                   // opening the group itself stacks; the thread is not "that chat"
+  assert.equal(nav.stack.length, 3);
+  assert.equal(nav.top().threadId, 0);
+  assert.equal(nav.rootChatId(), 1);
+  nav.pop();
+  nav.pop();
+  assert.equal(nav.top().chatId, 1);
+});

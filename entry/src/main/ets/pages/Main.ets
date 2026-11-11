@@ -54,12 +54,14 @@ struct Main {
   @State savedListW: number = 0;
   @State dragW: number = 0; // list width while the divider is dragged, 0 otherwise
   @State connection: string = '';
+  @State folderUnread: string = ''; // "id:count,..." so tabs refresh when counts change
   private nav: Nav = new Nav();
   private acc: Account = Accounts.get().active();
   private listener = (e: AccountEvent): void => this.onEvent(e);
   private managerListener = (): void => this.onAccountsChanged();
   private searchTimer: number = -1;
   private dragFrom: number = 0;
+  private listScroller: ListScroller = new ListScroller();
   private leaving: boolean = false;
 
   aboutToAppear(): void {
@@ -173,6 +175,18 @@ struct Main {
     if (this.folderId === 0) {
       this.archiveCount = chats.sorted(-1).length;
     }
+    this.folderUnread = [0].concat(this.folders.map((f: FolderItem) => f.id))
+      .map((id: number) => `${id}:${chats.unreadIn(id)}`).join(',');
+  }
+
+  private unreadOf(id: number): number {
+    for (const part of this.folderUnread.split(',')) {
+      const kv = part.split(':');
+      if (Number(kv[0]) === id) {
+        return Number(kv[1]);
+      }
+    }
+    return 0;
   }
 
   selectFolder(id: number): void {
@@ -260,6 +274,28 @@ struct Main {
     return this.nav.back();
   }
 
+  private quick(p: Promise<Object>): void {
+    this.listScroller.closeAllSwipeActions();
+    p.catch((e: Error) => promptAction.showToast({ message: e.message }));
+  }
+
+  // Revealed by swiping a chat row to the left.
+  @Builder
+  RowActions(row: ChatRowData) {
+    Row() {
+      Text(row.chat.unread > 0 || row.chat.markedUnread ? '已读' : '未读').fontSize(14).fontColor(Color.White)
+        .width(64).height('100%').textAlign(TextAlign.Center).backgroundColor('#4A9BEA')
+        .onClick(() => this.quick(this.acc.markRead(row.chat, row.chat.unread > 0 || row.chat.markedUnread)))
+      Text(row.pinned ? '取消置顶' : '置顶').fontSize(14).fontColor(Color.White)
+        .width(64).height('100%').textAlign(TextAlign.Center).backgroundColor('#F0A030')
+        .onClick(() => this.quick(this.acc.togglePin(row.chat, this.folderId, !row.pinned)))
+      Text(this.folderId === -1 ? '移出归档' : '归档').fontSize(14).fontColor(Color.White)
+        .width(64).height('100%').textAlign(TextAlign.Center).backgroundColor('#8E99A4')
+        .onClick(() => this.quick(this.acc.archive(row.chat, this.folderId !== -1)))
+    }
+    .height('100%')
+  }
+
   // Long-press menu of a chat row.
   chatMenu(row: ChatRowData): void {
     const c = row.chat;
@@ -319,13 +355,19 @@ struct Main {
 
   @Builder
   Tab(id: number, name: string) {
-    Text(name)
-      .fontSize(14)
-      .padding({ left: 14, right: 14, top: 6, bottom: 6 })
-      .borderRadius(16)
-      .fontColor(this.folderId === id ? Color.White : $r('app.color.text_primary'))
-      .backgroundColor(this.folderId === id ? $r('app.color.accent') : $r('app.color.chip'))
-      .onClick(() => this.selectFolder(id))
+    Row({ space: 5 }) {
+      Text(name).fontSize(14).fontColor(this.folderId === id ? Color.White : $r('app.color.text_primary'))
+      if (this.unreadOf(id) > 0) {
+        Text(this.unreadOf(id) > 99 ? '99+' : String(this.unreadOf(id))).fontSize(11)
+          .padding({ left: 5, right: 5 }).height(16).borderRadius(8)
+          .fontColor(this.folderId === id ? $r('app.color.accent') : Color.White)
+          .backgroundColor(this.folderId === id ? Color.White : $r('app.color.accent'))
+      }
+    }
+    .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+    .borderRadius(16)
+    .backgroundColor(this.folderId === id ? $r('app.color.accent') : $r('app.color.chip'))
+    .onClick(() => this.selectFolder(id))
   }
 
   // A route needs its back button unless it is the first one and the list
@@ -507,7 +549,7 @@ struct Main {
         if (this.folderId !== -1 && this.folders.length > 0) {
           this.Tabs()
         }
-        List() {
+        List({ scroller: this.listScroller }) {
           if (this.folderId === 0 && this.archiveCount > 0) {
             ListItem() {
               Row({ space: 12 }) {
@@ -531,7 +573,9 @@ struct Main {
                 .gesture(LongPressGesture().onAction(() => this.chatMenu(row)))
             }
             .backgroundColor(this.split() && this.stack.length > 0 && this.stack[0].kind === 'chat' &&
-              this.stack[0].chatId === row.chat.id ? $r('app.color.accent_soft') : Color.Transparent)
+              !this.stack[0].threadId && this.stack[0].chatId === row.chat.id ? $r('app.color.accent_soft') :
+              Color.Transparent)
+            .swipeAction({ end: { builder: (): void => { this.RowActions(row) } } })
           }, (row: ChatRowData) => row.key)
         }
         .layoutWeight(1)

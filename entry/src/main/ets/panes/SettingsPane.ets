@@ -306,9 +306,9 @@ export struct SettingsPane {
           .backgroundColor($r('app.color.card'))
           .margin({ top: 16 })
 
-          Text('TdGram 0.3 · 基于 TDLib').fontSize(12).fontColor($r('app.color.text_secondary'))
+          Text('TdGram 0.4 · 基于 TDLib').fontSize(12).fontColor($r('app.color.text_secondary'))
             .margin({ top: 16, bottom: 24 })
-            .onClick(() => copyText(`TdGram 0.3, account ${this.mgr.active().myUserId}`))
+            .onClick(() => copyText(`TdGram 0.4, account ${this.mgr.active().myUserId}`))
         }
         .padding({ left: 12, right: 12 })
         .width(contentWidth(this.paneW))
