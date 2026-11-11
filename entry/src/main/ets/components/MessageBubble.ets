@@ -658,15 +658,24 @@ export struct MessageBubble {
             ForEach(row, (b: InlineButton) => {
               Button(b.url ? `${b.text} ↗` : b.text, { buttonStyle: ButtonStyleMode.NORMAL })
                 .fontSize(13).height(34).layoutWeight(1).borderRadius(8)
+                .labelStyle({ maxLines: 1, overflow: TextOverflow.Ellipsis })
                 .onClick(() => this.actions?.onButton(this.data, b))
             }, (b: InlineButton, i: number) => `${ri}|${i}|${b.text}`)
           }
           .width('100%')
         }, (row: InlineButton[], ri: number) => `${ri}`)
       }
-      .width('100%')
+      // A fixed width, not '100%': the bubble has no width of its own (it hugs
+      // its content up to a maximum), so a percentage would be taken from the
+      // whole row and the buttons would stick out of the bubble.
+      .width(this.buttonsW())
       .margin({ top: 4 })
     }
+  }
+
+  // Inline buttons span the widest bubble (minus its padding).
+  private buttonsW(): number {
+    return Math.min(this.bubbleMax - 20, 420);
   }
 
   private tapOr(fn: () => void): void {
