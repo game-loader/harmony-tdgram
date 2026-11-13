@@ -28,6 +28,7 @@ export class Settings {
   listWidth: number = 0;         // vp, width of the list in split view; 0 = default
   proxies: ProxyConfig[] = [];
   proxyIndex: number = -1;       // enabled proxy, -1 = direct connection
+  videoSpeed: number = 1;        // playback speed last chosen in the video player
 
   // A copy with the saved values of `s` where present.
   static from(s: Settings): Settings {
@@ -45,6 +46,7 @@ export class Settings {
     d.listWidth = s.listWidth ?? d.listWidth;
     d.proxies = (s.proxies ?? []).map((p: ProxyConfig) => ProxyConfig.from(p));
     d.proxyIndex = s.proxyIndex ?? d.proxyIndex;
+    d.videoSpeed = typeof s.videoSpeed === 'number' && s.videoSpeed > 0 ? s.videoSpeed : d.videoSpeed;
     if (d.proxyIndex >= d.proxies.length) {
       d.proxyIndex = -1;
     }

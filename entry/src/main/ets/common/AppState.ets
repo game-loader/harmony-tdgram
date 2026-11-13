@@ -13,6 +13,8 @@ export class AppState {
   // Media viewer input: list of items shown in a pager.
   static viewer: ViewerItem[] = [];
   static viewerIndex: number = 0;
+  // Where each video was left, in seconds, by file id; kept while the app runs.
+  static videoPositions: Map<number, number> = new Map();
 }
 
 export class ViewerItem {

@@ -11,6 +11,7 @@ const D = load('common/ListDiff');
 const T = load('common/Tags');
 const A = load('components/AlbumLayout');
 const F = load('common/Filter');
+const V = load('common/VideoMath');
 
 // ---- Layout ----
 
@@ -350,4 +351,39 @@ test('filter: classifier request and response', () => {
   assert.equal(F.jevResult(200, '{"answers":{}}', 2).fatal, true);
   assert.equal(F.jevResult(422, 'oops', 1).retry, false);
   assert.equal(F.jevResult(422, 'oops', 1).fatal, false);
+});
+
+// ---- Video player ----
+
+test('video: relative seeks stay inside the video', () => {
+  assert.equal(V.seekTarget(30, 10, 120), 40);
+  assert.equal(V.seekTarget(5, -10, 120), 0);
+  assert.equal(V.seekTarget(115, 10, 120), 119.5);
+  assert.equal(V.seekTarget(20, 10, 0), 30); // duration not known yet
+});
+
+test('video: double taps act by thirds of the picture', () => {
+  assert.equal(V.tapZone(10, 300), -1);
+  assert.equal(V.tapZone(150, 300), 0);
+  assert.equal(V.tapZone(290, 300), 1);
+  assert.equal(V.tapZone(50, 0), 0);
+});
+
+test('video: speeds, holding and resuming', () => {
+  assert.equal(V.boostSpeed(1), 2);
+  assert.equal(V.boostSpeed(1.5), 2);
+  assert.equal(V.boostSpeed(2), 3);
+  assert.equal(V.normalizeSpeed(1.3), 1.25);
+  assert.equal(V.normalizeSpeed(9), 3);
+  assert.equal(V.speedLabel(1.25), '1.25×');
+  assert.equal(V.resumeAt(83, 600), 83);
+  assert.equal(V.resumeAt(3, 600), 0);
+  assert.equal(V.resumeAt(598, 600), 0);
+  assert.equal(V.resumeAt(83, 0), 83);
+  assert.equal(V.resumeAt(NaN, 600), 0);
+  assert.equal(V.clock(75), '1:15');
+  assert.equal(V.clock(3725), '1:02:05');
+  assert.equal(V.clock(-3), '0:00');
+  assert.equal(V.dragBrightness(0.5, -100, 400), 0.75);
+  assert.equal(V.dragBrightness(0.5, 1000, 400), 0.02);
 });

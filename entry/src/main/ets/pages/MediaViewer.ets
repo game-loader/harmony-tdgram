@@ -6,9 +6,11 @@ import { AppState, ViewerItem } from '../common/AppState';
 import { Accounts } from '../td/Accounts';
 import { AccountEvent } from '../td/Core';
 import { VideoStream } from '../services/VideoStream';
+import { WindowCtl } from '../services/WindowCtl';
+import { VideoPlayer } from '../components/VideoPlayer';
 
 // Full-screen pager for photos, videos and GIFs: swipe between items,
-// pinch to zoom photos, system video controls, save to gallery.
+// pinch to zoom photos, a video player of our own (see VideoPlayer), save to gallery.
 @Entry
 @Component
 struct MediaViewer {
@@ -18,6 +20,7 @@ struct MediaViewer {
   @State offX: number = 0;
   @State offY: number = 0;
   @State chrome: boolean = true;
+  @State visible: boolean = true; // false while the app or another page covers the viewer
   private baseScale: number = 1;
   private baseX: number = 0;
   private baseY: number = 0;
@@ -32,7 +35,17 @@ struct MediaViewer {
     this.ensure(this.index);
   }
 
+  onPageShow(): void {
+    this.visible = true;
+  }
+
+  // Leaving the app pauses the video, so it does not play on in the background.
+  onPageHide(): void {
+    this.visible = false;
+  }
+
   aboutToDisappear(): void {
+    WindowCtl.restore(getContext(this));
     this.acc.off(this.listener);
     this.streams.forEach((v: VideoStream) => v.close());
     this.streams.clear();
@@ -140,7 +153,7 @@ struct MediaViewer {
   }
 
   @Builder
-  Page(it: ViewerItem) {
+  Page(it: ViewerItem, i: number) {
     Stack() {
       if (!it.path && !it.streamUrl) {
         LoadingProgress().width(48).height(48).color(Color.White)
@@ -172,15 +185,25 @@ struct MediaViewer {
             }),
             TapGesture().onAction(() => { this.chrome = !this.chrome; })
           ))
+      } else if (it.kind === 'video') {
+        VideoPlayer({
+          item: it,
+          active: this.visible && i === this.index,
+          chrome: this.chrome,
+          toggleChrome: (): void => { this.chrome = !this.chrome; },
+          hideChrome: (): void => { this.chrome = false; }
+        })
       } else {
+        // GIFs: silent loops.
         Video({ src: it.streamUrl || ('file://' + it.path) })
           .width('100%')
           .height('100%')
           .autoPlay(true)
-          .loop(it.kind === 'animation')
-          .muted(it.kind === 'animation')
-          .controls(it.kind === 'video')
+          .loop(true)
+          .muted(true)
+          .controls(false)
           .objectFit(ImageFit.Contain)
+          .onClick(() => { this.chrome = !this.chrome; })
       }
     }
     .width('100%')
@@ -192,8 +215,8 @@ struct MediaViewer {
     // screen and the controls to the lower one.
     FolderStack({ upperItems: ['viewerMedia'] }) {
       Swiper() {
-        ForEach(this.items, (it: ViewerItem) => {
-          this.Page(it)
+        ForEach(this.items, (it: ViewerItem, i: number) => {
+          this.Page(it, i)
         }, (it: ViewerItem) => `${it.fileId}|${it.path}|${it.streamUrl}`)
       }
       .id('viewerMedia')
@@ -221,7 +244,10 @@ struct MediaViewer {
           Blank()
           if (this.items[this.index] && this.items[this.index].caption) {
             Text(this.items[this.index].caption).fontColor(Color.White).fontSize(15).padding(12).width('100%')
+              .maxLines(4).textOverflow({ overflow: TextOverflow.Ellipsis })
               .backgroundColor('#66000000')
+              // Above the video controls, which take the bottom of the screen.
+              .margin({ bottom: this.items[this.index].kind === 'video' ? 96 : 0 })
           }
         }
         .width('100%')
