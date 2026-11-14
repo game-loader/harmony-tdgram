@@ -32,7 +32,9 @@ export function sdkLoaderDir() {
   if (!sdk && fs.existsSync(props)) {
     sdk = (/^sdk\.dir=(.+)$/m.exec(fs.readFileSync(props, 'utf8')) ?? [])[1] ?? '';
   }
-  const api = fs.readdirSync(sdk).filter((d) => /^\d+$/.test(d)).sort((a, b) => b - a)[0];
+  // `12` (API 12 SDK) or `26.0.0` (OpenHarmony 7.0 SDK); the newest wins.
+  const api = fs.readdirSync(sdk).filter((d) => /^\d+(\.\d+)*$/.test(d))
+    .sort((a, b) => parseFloat(b) - parseFloat(a))[0];
   return path.join(sdk, api, 'ets/build-tools/ets-loader');
 }
 
@@ -68,7 +70,12 @@ function main() {
   const loader = sdkLoaderDir();
   const require = createRequire(import.meta.url);
   const ts = require(path.join(loader, 'node_modules/typescript'));
-  const etsOptions = { ets: require(path.join(loader, 'tsconfig.json')).compilerOptions.ets };
+  // The 7.0 SDK's tsconfig has trailing commas, so it is read the way tsc reads it.
+  const cfg = ts.readConfigFile(path.join(loader, 'tsconfig.json'), ts.sys.readFile);
+  if (cfg.error) {
+    throw new Error(ts.flattenDiagnosticMessageText(cfg.error.messageText, '\n'));
+  }
+  const etsOptions = { ets: cfg.config.compilerOptions.ets };
   const types = parseSchema(schemaFile);
   const allFields = new Set(['@type', '@extra', '@client_id']);
   types.forEach((t) => t.fields.forEach((_, k) => allFields.add(k)));

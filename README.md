@@ -64,10 +64,11 @@ _个人项目，与 Telegram 和华为无关。_
 
 3. 复制 `entry/src/main/ets/common/Config.template.ets` 为 `Config.ets`，填写在 <https://my.telegram.org/apps> 申请的 `api_id` 和 `api_hash`。
 
-4. 用 DevEco Studio 打开并签名运行，或用命令行（OpenHarmony SDK API 12、hvigor 5.x、Java 17）：
+4. 用 DevEco Studio 打开并签名运行，或用命令行（OpenHarmony 7.0 SDK，即 API 26，目录名须为 `26.0.0`；hvigor 6.26，`npm install` 装在项目里；Java 17）。应用最低支持 API 12：
 
    ```bash
-   echo "sdk.dir=/path/to/ohos-sdk" > local.properties
+   npm install
+   echo "sdk.dir=/path/to/ohos-sdk-7" > local.properties   # 其下有 26.0.0/{ets,js,native,previewer,toolchains}
    tools/build.sh    # 单元测试、TDLib 请求校验，然后 hvigor assembleHap
    ```
 

@@ -1,0 +1,9 @@
+{
+  "name": "tdgram-build",
+  "private": true,
+  "description": "Build tooling only (hvigor); the app itself is in entry/",
+  "devDependencies": {
+    "@ohos/hvigor": "6.26.20",
+    "@ohos/hvigor-ohos-plugin": "6.26.20"
+  }
+}
