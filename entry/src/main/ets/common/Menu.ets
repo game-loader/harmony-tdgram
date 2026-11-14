@@ -1,4 +1,5 @@
 import { promptAction } from '@kit.ArkUI';
+import { actionMenu } from './Ui';
 
 type B = promptAction.Button;
 type MenuButtons = [B, B?, B?, B?, B?, B?];
@@ -31,7 +32,7 @@ export function pickAction(labels: string[], title?: string, offset: number = 0)
   if (title) {
     opts.title = title;
   }
-  return promptAction.showActionMenu(opts).then((r: promptAction.ActionMenuSuccessResponse) => {
+  return actionMenu(opts).then((r: promptAction.ActionMenuSuccessResponse) => {
     if (rest > 6 && r.index === PAGE) {
       return pickAction(labels, title, offset + PAGE);
     }

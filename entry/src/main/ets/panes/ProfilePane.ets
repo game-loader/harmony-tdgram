@@ -1,4 +1,3 @@
-import { router, promptAction } from '@kit.ArkUI';
 import { Avatar } from '../components/Avatar';
 import { PaneHeader } from '../components/PaneHeader';
 import { AppState, copyText, ViewerItem } from '../common/AppState';
@@ -11,6 +10,7 @@ import { ChatItem, MsgItem } from '../td/Models';
 import { formatDuration, summary } from '../td/Parse';
 import { SearchPage } from '../td/MessageStore';
 import { o, TdError, TdObject } from '../td/TdClient';
+import { openPage, toast } from '../common/Ui';
 
 interface FieldP {
   label: string;
@@ -280,7 +280,7 @@ export struct ProfilePane {
       return v;
     });
     AppState.viewerIndex = Math.max(0, visual.findIndex((m: MsgItem) => m.id === id));
-    router.pushUrl({ url: 'pages/MediaViewer' });
+    openPage('pages/MediaViewer');
   }
 
   private rowTitle(m: MsgItem): string {
@@ -308,19 +308,19 @@ export struct ProfilePane {
   message(): void {
     this.acc.privateChatWith(this.userId).then((id: number) => {
       this.nav.openChat(id);
-    }).catch((e: TdError) => promptAction.showToast({ message: e.message }));
+    }).catch((e: TdError) => toast(e.message));
   }
 
   secretChat(): void {
     this.acc.startSecretChat(this.userId).then((id: number) => {
       this.nav.openChat(id);
-    }).catch((e: TdError) => promptAction.showToast({ message: e.message }));
+    }).catch((e: TdError) => toast(e.message));
   }
 
   toggleMute(): void {
     const c = this.chatId ? this.acc.chat(this.chatId) : undefined;
     if (c) {
-      this.acc.mute(c, this.muted ? 0 : MUTE_FOREVER).catch((e: TdError) => promptAction.showToast({ message: e.message }));
+      this.acc.mute(c, this.muted ? 0 : MUTE_FOREVER).catch((e: TdError) => toast(e.message));
     }
   }
 
@@ -332,8 +332,8 @@ export struct ProfilePane {
     }
     this.acc.send(req).then(() => {
       this.blocked = !this.blocked;
-      promptAction.showToast({ message: this.blocked ? '已屏蔽' : '已取消屏蔽' });
-    }).catch((e: TdError) => promptAction.showToast({ message: e.message }));
+      toast(this.blocked ? '已屏蔽' : '已取消屏蔽');
+    }).catch((e: TdError) => toast(e.message));
   }
 
   @Builder

@@ -1,4 +1,3 @@
-import { router, promptAction } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
@@ -8,6 +7,7 @@ import { AccountEvent } from '../td/Core';
 import { VideoStream } from '../services/VideoStream';
 import { WindowCtl } from '../services/WindowCtl';
 import { VideoPlayer } from '../components/VideoPlayer';
+import { toast } from '../common/Ui';
 
 // Full-screen pager for photos, videos and GIFs: swipe between items,
 // pinch to zoom photos, a video player of our own (see VideoPlayer), save to gallery.
@@ -45,7 +45,7 @@ struct MediaViewer {
   }
 
   aboutToDisappear(): void {
-    WindowCtl.restore(getContext(this));
+    WindowCtl.restore(this.getUIContext().getHostContext() as common.UIAbilityContext);
     this.acc.off(this.listener);
     this.streams.forEach((v: VideoStream) => v.close());
     this.streams.clear();
@@ -126,10 +126,10 @@ struct MediaViewer {
       }
     }
     if (!it || !it.path) {
-      promptAction.showToast({ message: '还没下载完' });
+      toast('还没下载完');
       return;
     }
-    const ctx = getContext(this) as common.UIAbilityContext;
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const helper = photoAccessHelper.getPhotoAccessHelper(ctx);
     const config: photoAccessHelper.PhotoCreationConfig = {
       fileNameExtension: it.kind === 'photo' ? 'jpg' : 'mp4',
@@ -148,8 +148,8 @@ struct MediaViewer {
       } finally {
         fs.closeSync(dst);
       }
-      promptAction.showToast({ message: '已保存到图库' });
-    }).catch((e: Error) => promptAction.showToast({ message: `保存失败：${e.message}` }));
+      toast('已保存到图库');
+    }).catch((e: Error) => toast(`保存失败：${e.message}`));
   }
 
   @Builder
@@ -234,7 +234,7 @@ struct MediaViewer {
         Column() {
           Row({ space: 8 }) {
             Button('✕', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontColor(Color.White).fontSize(20)
-              .onClick(() => router.back())
+              .onClick(() => this.getUIContext().getRouter().back())
             Text(`${this.index + 1} / ${this.items.length}`).fontColor(Color.White).layoutWeight(1)
             Button('保存', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontColor(Color.White).onClick(() => this.save())
           }

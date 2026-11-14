@@ -3,7 +3,7 @@ import { audio } from '@kit.AudioKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
 import tdbridge, { EncodedVoice } from 'libtdbridge.so';
-import { ensureDir } from '../common/Util';
+import { ensureDir, exists } from '../common/Util';
 
 export type PlayerListener = () => void;
 
@@ -50,7 +50,7 @@ export class AudioService {
       return Promise.resolve(path);
     }
     const cached = this.wavCache.get(path);
-    if (cached && fs.accessSync(cached)) {
+    if (cached && exists(cached)) {
       return Promise.resolve(cached);
     }
     const out = `${ensureDir(ctx.cacheDir + '/voice')}/${path.replace(/[\/\\:]/g, '_')}.wav`;
@@ -62,11 +62,7 @@ export class AudioService {
 
   toggle(ctx: common.UIAbilityContext, key: string, path: string, isOpus: boolean, title: string): void {
     if (this.key === key && this.player) {
-      if (this.playing) {
-        this.player.pause();
-      } else {
-        this.player.play();
-      }
+      this.togglePause();
       return;
     }
     this.stop();
@@ -85,6 +81,7 @@ export class AudioService {
     if (this.key !== key) {
       return;
     }
+    // @SuppressWarnings syscap
     media.createAVPlayer().then((p: media.AVPlayer) => {
       if (this.key !== key) {
         p.release();
@@ -117,7 +114,7 @@ export class AudioService {
       p.on('error', () => this.stop());
       this.fd = fs.openSync(file, fs.OpenMode.READ_ONLY).fd;
       p.url = `fd://${this.fd}`;
-    });
+    }).catch(() => this.stop());
   }
 
   // True while a voice note or music track is loaded (playing or paused).
@@ -130,10 +127,14 @@ export class AudioService {
     if (!this.player) {
       return;
     }
-    if (this.playing) {
-      this.player.pause();
-    } else {
-      this.player.play();
+    try {
+      if (this.playing) {
+        this.player.pause();
+      } else {
+        this.player.play();
+      }
+    } catch (e) {
+      // The player is in an invalid state; the next stateChange resets it.
     }
   }
 
@@ -150,17 +151,26 @@ export class AudioService {
   }
 
   private speedEnum(): media.PlaybackSpeed {
+    // @SuppressWarnings syscap
     return this.speed === 2 ? media.PlaybackSpeed.SPEED_FORWARD_2_00_X :
       (this.speed === 1.5 ? media.PlaybackSpeed.SPEED_FORWARD_1_50_X : media.PlaybackSpeed.SPEED_FORWARD_1_00_X);
   }
 
   stop(): void {
     if (this.player) {
-      this.player.release();
+      try {
+        this.player.release();
+      } catch (e) {
+        // Already released.
+      }
       this.player = null;
     }
     if (this.fd >= 0) {
-      fs.closeSync(this.fd);
+      try {
+        fs.closeSync(this.fd);
+      } catch (e) {
+        // Already closed.
+      }
       this.fd = -1;
     }
     this.key = '';
@@ -178,6 +188,7 @@ export class VoiceRecorder {
 
   start(ctx: common.UIAbilityContext): Promise<void> {
     this.path = `${ensureDir(ctx.cacheDir + '/rec')}/${Date.now()}.ogg`;
+    // @SuppressWarnings syscap
     const options: audio.AudioCapturerOptions = {
       streamInfo: {
         samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_16000,
@@ -190,6 +201,7 @@ export class VoiceRecorder {
     if (!tdbridge.encoderStart(this.path, 16000)) {
       return Promise.reject(new Error('encoder init failed'));
     }
+    // @SuppressWarnings syscap
     return audio.createAudioCapturer(options).then((c: audio.AudioCapturer) => {
       this.capturer = c;
       c.on('readData', (buf: ArrayBuffer) => tdbridge.encoderWrite(buf));

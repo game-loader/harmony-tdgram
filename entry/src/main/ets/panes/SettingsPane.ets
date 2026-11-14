@@ -10,6 +10,7 @@ import { Account } from '../td/Account';
 import { Accounts, Settings as AppSettings, SplitMode, ThemeMode } from '../td/Accounts';
 import { Filters } from '../td/Filters';
 import { o, TdError, TdObject } from '../td/TdClient';
+import { dialog, toast } from '../common/Ui';
 
 interface ItemP {
   label: string;
@@ -125,16 +126,16 @@ export struct SettingsPane {
         row.detail = `${x['device_model'] as string} · ${x['platform'] as string} · ${x['country'] as string}`;
         return row;
       });
-    }).catch((e: TdError) => promptAction.showToast({ message: e.message }));
+    }).catch((e: TdError) => toast(e.message));
   }
 
   private terminate(row: SessionRow): void {
-    promptAction.showDialog({ title: `终止“${row.title}”？`,
+    dialog({ title: `终止“${row.title}”？`,
       buttons: [{ text: '取消', color: '#888888' }, { text: '终止', color: '#E84026' }] })
       .then((r: promptAction.ShowDialogSuccessResponse) => {
         if (r.index === 1) {
           this.mgr.active().send(o({ '@type': 'terminateSession', 'session_id': row.id }))
-            .then(() => this.loadSessions()).catch((e: TdError) => promptAction.showToast({ message: e.message }));
+            .then(() => this.loadSessions()).catch((e: TdError) => toast(e.message));
         }
       });
   }
@@ -149,13 +150,13 @@ export struct SettingsPane {
     this.mgr.active().send(o({ '@type': 'optimizeStorage', 'size': 0, 'ttl': 0, 'count': 0, 'immunity_delay': 0,
       'file_types': [], 'chat_ids': [], 'exclude_chat_ids': [], 'return_deleted_file_statistics': false,
       'chat_limit': 0 })).then(() => {
-      promptAction.showToast({ message: '缓存已清理' });
+      toast('缓存已清理');
       this.loadStorage();
-    }).catch((e: TdError) => promptAction.showToast({ message: e.message }));
+    }).catch((e: TdError) => toast(e.message));
   }
 
   private logOut(): void {
-    promptAction.showDialog({ title: '退出当前账号？',
+    dialog({ title: '退出当前账号？',
       buttons: [{ text: '取消', color: '#888888' }, { text: '退出', color: '#E84026' }] })
       .then((r: promptAction.ShowDialogSuccessResponse) => {
         if (r.index === 1) {

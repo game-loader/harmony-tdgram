@@ -1,4 +1,3 @@
-import { promptAction } from '@kit.ArkUI';
 import { PaneHeader } from '../components/PaneHeader';
 import { compilePattern } from '../common/Filter';
 import { contentWidth } from '../common/Layout';
@@ -7,6 +6,7 @@ import { formatDay } from '../common/Util';
 import { pickAction } from '../common/Menu';
 import { Accounts } from '../td/Accounts';
 import { DEFAULT_AI_MODEL, DEFAULT_AI_URL, FilterConfig, FilterEntry, Filters } from '../td/Filters';
+import { toast } from '../common/Ui';
 
 interface SwitchP {
   label: string;
@@ -106,7 +106,7 @@ export struct FiltersPane {
       return;
     }
     if (!compilePattern(v).valid) {
-      promptAction.showToast({ message: '规则无效：正则写成 /表达式/，且必须能通过编译' });
+      toast('规则无效：正则写成 /表达式/，且必须能通过编译');
       return;
     }
     if (!this.cfg.rules.includes(v)) {
@@ -299,7 +299,7 @@ export struct FiltersPane {
                 Blank()
                 Button('清除记住的判断', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => {
                   this.filters.clearVerdicts();
-                  promptAction.showToast({ message: '已清除，消息会重新判断' });
+                  toast('已清除，消息会重新判断');
                 })
               }
               .padding({ left: 8, right: 8 })

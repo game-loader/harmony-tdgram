@@ -13,7 +13,7 @@ import { sdkLoaderDir } from './check-td.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ets = path.join(here, '../entry/src/main/ets');
-const MODULES = ['common/Layout', 'common/Nav', 'common/ListDiff', 'common/Tags', 'common/Filter', 'common/VideoMath',
+const MODULES = ['common/Layout', 'common/Nav', 'common/ListDiff', 'common/Tags', 'common/Filter', 'common/VideoMath', 'common/Links',
   'components/AlbumLayout', 'td/Models', 'td/Filters'];
 
 const require = createRequire(import.meta.url);

@@ -19,13 +19,17 @@ node tools/test.mjs > /tmp/tdgram-test.log 2>&1 || { grep -E '^✖|^not ok|Error
 grep -E '^ℹ (pass|fail)' /tmp/tdgram-test.log | tr '\n' ' '; echo
 node tools/check-td.mjs || exit 1
 
+# The ArkTS compiler checks imports of libtdbridge.so against its .d.ts, found
+# through oh_modules (ohpm would create this link).
+mkdir -p entry/oh_modules
+[ -e entry/oh_modules/libtdbridge.so ] || ln -s ../src/main/cpp/types/libtdbridge entry/oh_modules/libtdbridge.so
+
 log=/tmp/tdgram-build.log
 node node_modules/@ohos/hvigor/bin/hvigor.js --mode module -p module=entry@default -p product=default \
   -p buildMode="$mode" assembleHap --no-daemon > "$log" 2>&1
 status=$?
 clean() { sed 's/\x1b\[[0-9;]*m//g' "$log"; }
-# ArkTS errors with their messages; the known "native module is not verified" warnings are skipped.
-clean | awk '/ArkTS:ERROR/ {show=5} /ArkTS:WARN/ {show = ($0 ~ /\.ets:[0-9]+:[0-9]+$/) ? 3 : 0} show > 0 {print; show--}' \
-  | grep -v -B1 -A1 "is not verified" | grep -v '^--$' | head -150
+# ArkTS errors and warnings with their messages.
+clean | awk '/ArkTS:ERROR/ {show=5} /ArkTS:WARN/ {show = ($0 ~ /\.ets:[0-9]+:[0-9]+$/) ? 3 : 0} show > 0 {print; show--}' | head -150
 clean | grep -E "COMPILE RESULT|BUILD (SUCCESSFUL|FAILED)|hvigor ERROR" | grep -v "ArkTS Compiler Error" | head -8
 exit $status

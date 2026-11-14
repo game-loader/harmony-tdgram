@@ -2,6 +2,8 @@ import { AbilityConstant, Configuration, ConfigurationConstant, UIAbility, Want 
 import { KeyboardAvoidMode, window } from '@kit.ArkUI';
 import { notificationManager } from '@kit.NotificationKit';
 import { Accounts } from '../td/Accounts';
+import { Ui } from '../common/Ui';
+import { isTelegramLink } from '../common/Links';
 
 export default class EntryAbility extends UIAbility {
   private stage: window.WindowStage | null = null;
@@ -19,6 +21,11 @@ export default class EntryAbility extends UIAbility {
   }
 
   private openFrom(want: Want): void {
+    // tg://… and t.me links, e.g. a web page's "Open in Telegram" button.
+    if (want.uri && isTelegramLink(want.uri)) {
+      Accounts.get().openFromLink(want.uri);
+      return;
+    }
     const p = want.parameters;
     if (p && p['tdgramChat'] !== undefined) {
       Accounts.get().openFromNotification(Number(p['tdgramSlot'] ?? 0), Number(p['tdgramChat']));
@@ -57,7 +64,9 @@ export default class EntryAbility extends UIAbility {
       // The keyboard shrinks the page instead of pushing it up, so the chat
       // header stays visible on short windows (unfolded, held sideways).
       try {
-        windowStage.getMainWindowSync().getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
+        const ui = windowStage.getMainWindowSync().getUIContext();
+        Ui.context = ui;
+        ui.setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
       } catch (e) {
         // Keep the default behaviour.
       }

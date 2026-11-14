@@ -1,4 +1,3 @@
-import { promptAction } from '@kit.ArkUI';
 import { Avatar } from '../components/Avatar';
 import { PaneHeader } from '../components/PaneHeader';
 import { Nav } from '../common/Nav';
@@ -6,6 +5,7 @@ import { lastSeen } from '../common/Util';
 import { Accounts } from '../td/Accounts';
 import { UserItem } from '../td/Models';
 import { o, TdError, TdObject } from '../td/TdClient';
+import { toast } from '../common/Ui';
 
 class ContactRow {
   id: number = 0;
@@ -53,7 +53,7 @@ export struct ContactsPane {
   open(userId: number): void {
     const p = this.secretMode ? this.acc.startSecretChat(userId) : this.acc.privateChatWith(userId);
     p.then((chatId: number) => this.nav.replaceWithChat(chatId))
-      .catch((e: TdError) => promptAction.showToast({ message: e.message }));
+      .catch((e: TdError) => toast(e.message));
   }
 
   findUsername(): void {
@@ -63,7 +63,7 @@ export struct ContactsPane {
     }
     this.acc.send(o({ '@type': 'searchPublicChat', 'username': name })).then((c: TdObject) => {
       this.nav.replaceWithChat(c['id'] as number);
-    }).catch(() => promptAction.showToast({ message: '找不到该用户名' }));
+    }).catch(() => toast('找不到该用户名'));
   }
 
   build() {

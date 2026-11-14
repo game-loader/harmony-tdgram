@@ -78,8 +78,11 @@ export function avatarColor(id: number): string {
   return AVATAR_COLORS[Math.abs(id) % AVATAR_COLORS.length];
 }
 
-// TDLib needs a real filesystem path, but pickers return content URIs, so
-// the picked file is copied into the app's cache directory first.
+/**
+ * TDLib needs a real filesystem path, but pickers return content URIs, so
+ * the picked file is copied into the app's cache directory first.
+ * @throws { Error } when the picked file cannot be read or copied.
+ */
 export function copyToCache(context: common.UIAbilityContext, uri: string, name: string): string {
   const dir = ensureDir(context.cacheDir + '/upload');
   const safe = name.replace(/[\/\\]/g, '_');
@@ -93,9 +96,23 @@ export function copyToCache(context: common.UIAbilityContext, uri: string, name:
   return dest;
 }
 
+export function exists(path: string): boolean {
+  try {
+    return fs.accessSync(path);
+  } catch (e) {
+    return false;
+  }
+}
+
+// Creates the directory if needed. A failure shows up when the file inside
+// it is written.
 export function ensureDir(dir: string): string {
-  if (!fs.accessSync(dir)) {
-    fs.mkdirSync(dir, true);
+  try {
+    if (!fs.accessSync(dir)) {
+      fs.mkdirSync(dir, true);
+    }
+  } catch (e) {
+    // Reported by the caller's write.
   }
   return dir;
 }

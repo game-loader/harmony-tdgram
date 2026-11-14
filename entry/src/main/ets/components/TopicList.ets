@@ -1,4 +1,3 @@
-import { promptAction } from '@kit.ArkUI';
 import { Avatar } from './Avatar';
 import { formatTime } from '../common/Util';
 import { Accounts } from '../td/Accounts';
@@ -6,6 +5,7 @@ import { Account } from '../td/Account';
 import { AccountEvent } from '../td/Core';
 import { TopicItem } from '../td/Models';
 import { TdError } from '../td/TdClient';
+import { toast } from '../common/Ui';
 
 function hexColor(c: number): string {
   return '#' + ('000000' + c.toString(16)).slice(-6);
@@ -64,7 +64,7 @@ export struct TopicList {
       this.loading = false;
     }).catch((e: TdError) => {
       this.loading = false;
-      promptAction.showToast({ message: `加载话题失败：${e.message}` });
+      toast(`加载话题失败：${e.message}`);
     });
   }
 

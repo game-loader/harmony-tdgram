@@ -1,4 +1,4 @@
-import { router, promptAction } from '@kit.ArkUI';
+import { promptAction } from '@kit.ArkUI';
 import { common, abilityAccessCtrl, Permissions, PermissionRequestResult } from '@kit.AbilityKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { picker, fileIo as fs } from '@kit.CoreFileKit';
@@ -27,6 +27,9 @@ import { TdError, TdObject } from '../td/TdClient';
 import { unifiedDataChannel, uniformTypeDescriptor } from '@kit.ArkData';
 import { AudioService, VoiceRecorder } from '../services/AudioService';
 import { EncodedVoice } from 'libtdbridge.so';
+import { dialog, openPage, toast } from '../common/Ui';
+import { isTelegramLink } from '../common/Links';
+import { openLinkTarget } from '../common/LinkOpen';
 
 class ReplyPreview {
   name: string = '';
@@ -205,6 +208,7 @@ export struct ChatView {
   private recordTimer: number = -1;
   private scroller: Scroller = new Scroller();
   private hitScroller: Scroller = new Scroller();
+  // @SuppressWarnings syscap
   private input: TextAreaController = new TextAreaController();
   private listener = (e: AccountEvent): void => this.onEvent(e);
   private audioListener = (): void => this.onAudio();
@@ -352,11 +356,11 @@ export struct ChatView {
   }
 
   private ctx(): common.UIAbilityContext {
-    return getContext(this) as common.UIAbilityContext;
+    return this.getUIContext().getHostContext() as common.UIAbilityContext;
   }
 
   private toast(message: string): void {
-    promptAction.showToast({ message: message });
+    toast(message);
   }
 
   private refreshHeader(): void {
@@ -945,6 +949,7 @@ export struct ChatView {
 
   // Reads width, height and duration so a video gets a proper player bubble.
   private videoContent(path: string, caption: string): Promise<TdObject> {
+    // @SuppressWarnings syscap
     return media.createAVMetadataExtractor().then((ex: media.AVMetadataExtractor) => {
       const file = fs.openSync(path, fs.OpenMode.READ_ONLY);
       ex.fdSrc = { fd: file.fd };
@@ -1051,6 +1056,7 @@ export struct ChatView {
     this.closePanels();
     const perms: Permissions[] = ['ohos.permission.APPROXIMATELY_LOCATION', 'ohos.permission.LOCATION'];
     abilityAccessCtrl.createAtManager().requestPermissionsFromUser(this.ctx(), perms).then(() => {
+      // @SuppressWarnings syscap
       return geoLocationManager.getCurrentLocation();
     }).then((loc: geoLocationManager.Location) => {
       this.after(this.store.sendLocation(loc.latitude, loc.longitude, this.opts()));
@@ -1163,7 +1169,7 @@ export struct ChatView {
       return v;
     });
     AppState.viewerIndex = Math.max(0, visual.findIndex((a: AlbumItem) => a.msg.id === m.id));
-    router.pushUrl({ url: 'pages/MediaViewer' });
+    openPage('pages/MediaViewer');
   }
 
   playAudio(d: BubbleData): void {
@@ -1297,7 +1303,7 @@ export struct ChatView {
           this.openUrl(url);
         } else if (text) {
           if (r['show_alert']) {
-            promptAction.showDialog({ message: text, buttons: [{ text: '好', color: '#3A8DDE' }] });
+            dialog({ message: text, buttons: [{ text: '好', color: '#3A8DDE' }] });
           } else {
             this.toast(text);
           }
@@ -1307,46 +1313,19 @@ export struct ChatView {
   }
 
   private openTarget(t: LinkTarget): void {
-    if (t.proxy) {
-      const mgr = Accounts.get();
-      mgr.settings.proxies.push(t.proxy);
-      mgr.saveSettings();
-      this.toast('代理已保存，可在“设置 > 代理”中启用');
-      this.nav.push('proxy');
-      this.nav.commit();
-    } else if (t.invite) {
-      promptAction.showDialog({
-        title: `加入“${t.inviteTitle}”？`,
-        buttons: [{ text: '取消', color: '#888888' }, { text: '加入', color: '#3A8DDE' }]
-      }).then((r: promptAction.ShowDialogSuccessResponse) => {
-        if (r.index !== 1) {
-          return;
-        }
-        this.acc.joinByLink(t.invite).then((chatId: number) => {
-          if (chatId) {
-            this.nav.openChat(chatId);
-          } else {
-            this.toast('已发送加入申请');
-          }
-        }).catch((e: TdError) => this.toast(e.message));
-      });
-    } else if (t.botStart && t.chatId) {
-      this.nav.openChat(t.chatId, 0, t.startParam);
-    } else if (t.chatId === this.chatId && t.messageId && !this.threadId) {
+    if (t.chatId === this.chatId && t.messageId && !this.threadId && !t.proxy && !t.invite && !t.botStart) {
       this.jumpTo(t.messageId);
-    } else if (t.chatId) {
-      this.nav.openChat(t.chatId, t.messageId);
     } else {
-      this.toast('无法打开链接');
+      openLinkTarget(this.acc, this.nav, t, false);
     }
   }
 
   openUrl(url: string): void {
-    if (/^(https?:\/\/)?(t\.me|telegram\.me)\//i.test(url) || url.startsWith('tg:')) {
+    if (isTelegramLink(url)) {
       this.acc.openLink(url).then((t: LinkTarget) => this.openTarget(t)).catch(() => this.toast('无法打开链接'));
       return;
     }
-    promptAction.showDialog({
+    dialog({
       title: '打开链接？', message: url,
       buttons: [{ text: '复制', color: '#888888' }, { text: '打开', color: '#3A8DDE' }]
     }).then((r: promptAction.ShowDialogSuccessResponse) => {
@@ -1681,7 +1660,7 @@ export struct ChatView {
     if (ad >= 0) {
       lines.push(`AI 判断为广告的概率：${Math.round(ad * 100)}%`);
     }
-    promptAction.showDialog({ title: '消息信息', message: lines.join('\n'),
+    dialog({ title: '消息信息', message: lines.join('\n'),
       buttons: [{ text: '复制 ID', color: '#888888' }, { text: '关闭', color: '#3A8DDE' }] })
       .then((r: promptAction.ShowDialogSuccessResponse) => {
         if (r.index === 0) {
@@ -1695,7 +1674,7 @@ export struct ChatView {
     if (canRevoke) {
       buttons.push({ text: '为所有人删除', color: '#E84026' });
     }
-    promptAction.showDialog({ title: ids.length > 1 ? `删除 ${ids.length} 条消息？` : '删除消息？', buttons: buttons })
+    dialog({ title: ids.length > 1 ? `删除 ${ids.length} 条消息？` : '删除消息？', buttons: buttons })
       .then((r: promptAction.ShowDialogSuccessResponse) => {
         if (r.index >= 1) {
           this.store.remove(this.chatId, ids, r.index === 2).catch((e: TdError) => this.toast(e.message));
@@ -1767,7 +1746,7 @@ export struct ChatView {
       });
     }
     add('清空聊天记录', () => {
-      promptAction.showDialog({ title: '清空聊天记录？',
+      dialog({ title: '清空聊天记录？',
         buttons: [{ text: '取消', color: '#888888' }, { text: '清空', color: '#E84026' }] })
         .then((d: promptAction.ShowDialogSuccessResponse) => {
           if (d.index === 1) {
@@ -2363,7 +2342,7 @@ export struct ChatView {
       return;
     }
     const far = this.swipeX <= -48;
-    animateTo({ duration: 140 }, () => {
+    this.getUIContext().animateTo({ duration: 140 }, () => {
       this.swipeX = 0;
     });
     setTimeout((): void => {

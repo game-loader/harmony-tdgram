@@ -176,7 +176,11 @@ export class Filters {
 
   private read(name: string): string {
     const path = `${this.dir}/${name}`;
-    return fs.accessSync(path) ? fs.readTextSync(path) : '';
+    try {
+      return fs.accessSync(path) ? fs.readTextSync(path) : '';
+    } catch (e) {
+      return '';
+    }
   }
 
   // Written to a temporary file first, so a crash never leaves half a file.

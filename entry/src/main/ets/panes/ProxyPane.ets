@@ -1,10 +1,10 @@
-import { promptAction } from '@kit.ArkUI';
 import { PaneHeader } from '../components/PaneHeader';
 import { contentWidth } from '../common/Layout';
 import { Nav } from '../common/Nav';
 import { Accounts } from '../td/Accounts';
 import { ProxyConfig, ProxyKind } from '../td/Proxy';
 import { o, TdError, TdObject } from '../td/TdClient';
+import { toast } from '../common/Ui';
 
 interface FieldP {
   label: string;
@@ -70,11 +70,11 @@ export struct ProxyPane {
   private commit(): void {
     const port = Number(this.port.trim());
     if (!this.server.trim() || !(port > 0 && port < 65536)) {
-      promptAction.showToast({ message: '请填写服务器地址和正确的端口' });
+      toast('请填写服务器地址和正确的端口');
       return;
     }
     if (KINDS[this.kind] === 'mtproto' && !this.secret.trim()) {
-      promptAction.showToast({ message: 'MTProto 代理需要填写密钥' });
+      toast('MTProto 代理需要填写密钥');
       return;
     }
     const p = new ProxyConfig();
@@ -118,7 +118,7 @@ export struct ProxyPane {
     }
     const set = (text: string): void => {
       if (index < 0) {
-        promptAction.showToast({ message: `直接连接：${text}` });
+        toast(`直接连接：${text}`);
         return;
       }
       const next = this.pings.slice();

@@ -12,6 +12,7 @@ const T = load('common/Tags');
 const A = load('components/AlbumLayout');
 const F = load('common/Filter');
 const V = load('common/VideoMath');
+const K = load('common/Links');
 
 // ---- Layout ----
 
@@ -386,4 +387,14 @@ test('video: speeds, holding and resuming', () => {
   assert.equal(V.clock(-3), '0:00');
   assert.equal(V.dragBrightness(0.5, -100, 400), 0.75);
   assert.equal(V.dragBrightness(0.5, 1000, 400), 0.02);
+});
+
+test('links: Telegram links are opened inside the app', () => {
+  for (const u of ['tg://resolve?domain=durov', 'TG://join?invite=abc', 'https://t.me/durov', 't.me/c/123/45',
+    'http://telegram.me/joinchat/xyz', 'https://www.t.me/s/news', 'https://telegram.dog/bot?start=1']) {
+    assert.equal(K.isTelegramLink(u), true, u);
+  }
+  for (const u of ['https://example.com/t.me/x', 'https://t.message.com/', 'https://telegram.org/', 'mailto:a@t.me']) {
+    assert.equal(K.isTelegramLink(u), false, u);
+  }
 });

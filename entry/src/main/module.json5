@@ -14,13 +14,28 @@
         "srcEntry": "./ets/entryability/EntryAbility.ets",
         "description": "$string:module_desc",
         "icon": "$media:icon",
-        "label": "$string:app_name",
+        "label": "$string:ability_label",
         "startWindowIcon": "$media:icon",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
         "orientation": "auto_rotation_restricted",
         "supportWindowMode": ["fullscreen", "split", "floating"],
-        "skills": [{ "entities": ["entity.system.home"], "actions": ["action.system.home"] }]
+        "skills": [
+          { "entities": ["entity.system.home"], "actions": ["action.system.home"] },
+          {
+            // Telegram links from browsers and other apps ("Open in Telegram").
+            "entities": ["entity.system.browsable"],
+            "actions": ["ohos.want.action.viewData"],
+            "uris": [
+              { "scheme": "tg" },
+              { "scheme": "https", "host": "t.me" },
+              { "scheme": "https", "host": "telegram.me" },
+              { "scheme": "https", "host": "telegram.dog" },
+              { "scheme": "http", "host": "t.me" },
+              { "scheme": "http", "host": "telegram.me" }
+            ]
+          }
+        ]
       }
     ],
     "requestPermissions": [

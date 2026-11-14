@@ -1,4 +1,4 @@
-import { display, promptAction, router } from '@kit.ArkUI';
+import { display, promptAction } from '@kit.ArkUI';
 import { ChatRow, ChatRowActions, ChatRowData } from '../components/ChatRow';
 import { ChatPane } from '../components/ChatPane';
 import { Avatar } from '../components/Avatar';
@@ -10,7 +10,7 @@ import { ProfilePane } from '../panes/ProfilePane';
 import { ProxyPane } from '../panes/ProxyPane';
 import { SecretKeyPane } from '../panes/SecretKeyPane';
 import { SettingsPane } from '../panes/SettingsPane';
-import { Account } from '../td/Account';
+import { Account, LinkTarget } from '../td/Account';
 import { Accounts } from '../td/Accounts';
 import { FolderItem } from '../td/ChatStore';
 import { AccountEvent } from '../td/Core';
@@ -20,6 +20,8 @@ import { isSplit, listWidth, snapListWidth } from '../common/Layout';
 import { Nav, Route } from '../common/Nav';
 import { formatTime } from '../common/Util';
 import { pickAction } from '../common/Menu';
+import { dialog, replacePage, toast } from '../common/Ui';
+import { openLinkTarget } from '../common/LinkOpen';
 
 const MUTE_FOREVER = 0x7FFFFFFF;
 const DIVIDER_W = 12; // touch width of the divider between the panes
@@ -106,7 +108,7 @@ struct Main {
   private toLogin(): void {
     if (!this.leaving) {
       this.leaving = true;
-      router.replaceUrl({ url: 'pages/Login' });
+      replacePage('pages/Login');
     }
   }
 
@@ -129,13 +131,24 @@ struct Main {
     this.openPending();
   }
 
-  // Opens the chat of a tapped notification once its account is active.
+  // Opens the chat of a tapped notification once its account is active, and
+  // a link another app handed us once the account is logged in.
   private openPending(): void {
     const mgr = Accounts.get();
-    if (mgr.pendingChat && this.acc.authStep === 'ready' && this.acc.chat(mgr.pendingChat)) {
+    if (this.acc.authStep !== 'ready') {
+      return;
+    }
+    if (mgr.pendingChat && this.acc.chat(mgr.pendingChat)) {
       const chatId = mgr.pendingChat;
       mgr.pendingChat = 0;
       this.nav.openRootChat(chatId);
+    }
+    if (mgr.pendingLink) {
+      const url = mgr.pendingLink;
+      mgr.pendingLink = '';
+      const acc = this.acc;
+      acc.openLink(url).then((t: LinkTarget) => openLinkTarget(acc, this.nav, t, true))
+        .catch(() => toast('无法打开链接'));
     }
   }
 
@@ -150,7 +163,7 @@ struct Main {
       this.refreshConnection();
     } else if (e === 'chats' || e === 'files' || e === 'typing') {
       this.refresh();
-      if (e === 'chats' && Accounts.get().pendingChat) {
+      if (e === 'chats' && (Accounts.get().pendingChat || Accounts.get().pendingLink)) {
         this.openPending();
       }
     }
@@ -275,13 +288,19 @@ struct Main {
   // Horizontal position and width (vp) of a vertical fold crease inside the
   // window; [0, 0] when there is none.
   private crease(): number[] {
+    if (!canIUse('SystemCapability.Window.SessionManager')) {
+      return [0, 0];
+    }
     try {
+      // @SuppressWarnings syscap
       if (!display.isFoldable()) {
         return [0, 0];
       }
+      // @SuppressWarnings syscap
       for (const r of display.getCurrentFoldCreaseRegion().creaseRects) {
         if (r.height > r.width) {
-          return [px2vp(r.left), px2vp(r.width)];
+          const ui = this.getUIContext();
+          return [ui.px2vp(r.left), ui.px2vp(r.width)];
         }
       }
     } catch (e) {
@@ -303,8 +322,12 @@ struct Main {
   }
 
   private quick(p: Promise<Object>): void {
-    this.listScroller.closeAllSwipeActions();
-    p.catch((e: Error) => promptAction.showToast({ message: e.message }));
+    try {
+      this.listScroller.closeAllSwipeActions();
+    } catch (e) {
+      // The list is not shown.
+    }
+    p.catch((e: Error) => toast(e.message));
   }
 
   // Revealed by swiping a chat row to the left.
@@ -337,7 +360,7 @@ struct Main {
           this.confirmDelete(c);
           return;
       }
-      p.catch((e: Error) => promptAction.showToast({ message: e.message }));
+      p.catch((e: Error) => toast(e.message));
     }).catch(() => {});
   }
 
@@ -347,13 +370,13 @@ struct Main {
     if (isPrivate) {
       buttons.push({ text: '同时为对方删除', color: '#E84026' });
     }
-    promptAction.showDialog({ title: `删除与“${c.title}”的聊天？`, buttons: buttons })
+    dialog({ title: `删除与“${c.title}”的聊天？`, buttons: buttons })
       .then((r: promptAction.ShowDialogSuccessResponse) => {
         if (r.index >= 1) {
           if (this.nav.rootChatId() === c.id) {
             this.nav.clear();
           }
-          this.acc.deleteChat(c, r.index === 2).catch((e: Error) => promptAction.showToast({ message: e.message }));
+          this.acc.deleteChat(c, r.index === 2).catch((e: Error) => toast(e.message));
         }
       });
   }

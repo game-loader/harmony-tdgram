@@ -1,5 +1,6 @@
 import { pasteboard } from '@kit.BasicServicesKit';
-import { promptAction } from '@kit.ArkUI';
+
+import { toast } from './Ui';
 
 // Cross-page hand-offs that do not fit router params.
 export class ForwardRequest {
@@ -28,9 +29,9 @@ export class ViewerItem {
   streamUrl: string = ''; // set while a video plays from a partial download
 }
 
-export function copyText(text: string, toast: string = '已复制'): void {
+export function copyText(text: string, message: string = '已复制'): void {
   const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
   pasteboard.getSystemPasteboard().setData(data).then(() => {
-    promptAction.showToast({ message: toast });
+    toast(message);
   }).catch(() => {});
 }

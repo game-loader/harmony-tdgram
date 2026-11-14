@@ -8,7 +8,13 @@
         "compileSdkVersion": "26.0.0",
         "compatibleSdkVersion": 12,
         "targetSdkVersion": "26.0.0",
-        "runtimeOS": "OpenHarmony"
+        "runtimeOS": "OpenHarmony",
+        "buildOption": {
+          "arkOptions": {
+            // Checks imports of libtdbridge.so against its .d.ts.
+            "tscConfig": { "tsImportSoCheck": true }
+          }
+        }
       }
     ],
     "buildModeSet": [{ "name": "debug" }, { "name": "release" }]

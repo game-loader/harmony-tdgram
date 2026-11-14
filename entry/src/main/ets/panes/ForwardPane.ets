@@ -1,4 +1,3 @@
-import { promptAction } from '@kit.ArkUI';
 import { ChatRow, ChatRowData } from '../components/ChatRow';
 import { PaneHeader } from '../components/PaneHeader';
 import { AppState } from '../common/AppState';
@@ -6,6 +5,7 @@ import { Nav } from '../common/Nav';
 import { Accounts } from '../td/Accounts';
 import { ChatItem } from '../td/Models';
 import { TdError } from '../td/TdClient';
+import { toast } from '../common/Ui';
 
 // Picks the destination chat for AppState.forward, then opens that chat.
 @Component
@@ -41,11 +41,11 @@ export struct ForwardPane {
     this.busy = true;
     this.acc.actions.forward(chatId, req.fromChatId, req.ids, req.asCopy).then(() => {
       AppState.forward = null;
-      promptAction.showToast({ message: '已转发' });
+      toast('已转发');
       this.nav.replaceWithChat(chatId);
     }).catch((e: TdError) => {
       this.busy = false;
-      promptAction.showToast({ message: `转发失败：${e.message}` });
+      toast(`转发失败：${e.message}`);
     });
   }
 

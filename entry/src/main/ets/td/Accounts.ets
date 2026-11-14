@@ -68,6 +68,8 @@ export class Accounts {
   appInForeground: boolean = true;
   // Chat a tapped notification asks for; the main page opens and clears it.
   pendingChat: number = 0;
+  // A Telegram link another app opened us with, for the active account.
+  pendingLink: string = '';
   onThemeChanged: () => void = (): void => {};
 
   static get(): Accounts {
@@ -82,10 +84,19 @@ export class Accounts {
       return;
     }
     this.context = context;
-    this.store = preferences.getPreferencesSync(context, { name: 'tdgram' });
-    const slots = JSON.parse(this.store.getSync('slots', '[0]') as string) as number[];
-    this.activeSlot = this.store.getSync('active', slots[0]) as number;
-    const saved = this.store.getSync('settings', '') as string;
+    let slots: number[] = [0];
+    let saved = '';
+    try {
+      const store = preferences.getPreferencesSync(context, { name: 'tdgram' });
+      this.store = store;
+      slots = JSON.parse(store.getSync('slots', '[0]') as string) as number[];
+      this.activeSlot = store.getSync('active', slots[0]) as number;
+      saved = store.getSync('settings', '') as string;
+    } catch (e) {
+      // Unreadable preferences: start with one empty account slot.
+      slots = [0];
+      this.activeSlot = 0;
+    }
     if (saved) {
       try {
         this.settings = Settings.from(JSON.parse(saved) as Settings);
@@ -177,9 +188,13 @@ export class Accounts {
   }
 
   private persist(): void {
-    this.store?.putSync('slots', JSON.stringify(Array.from(this.accounts.keys())));
-    this.store?.putSync('active', this.activeSlot);
-    this.store?.flush();
+    try {
+      this.store?.putSync('slots', JSON.stringify(Array.from(this.accounts.keys())));
+      this.store?.putSync('active', this.activeSlot);
+      this.store?.flush().catch(() => {});
+    } catch (e) {
+      // Kept in memory; written again on the next change.
+    }
   }
 
   switchTo(slot: number): void {
@@ -217,8 +232,12 @@ export class Accounts {
   }
 
   saveSettings(): void {
-    this.store?.putSync('settings', JSON.stringify(this.settings));
-    this.store?.flush();
+    try {
+      this.store?.putSync('settings', JSON.stringify(this.settings));
+      this.store?.flush().catch(() => {});
+    } catch (e) {
+      // Kept in memory; written again on the next change.
+    }
     for (const a of this.all()) {
       a.readReceipts = !this.settings.ghostMode;
       if (a.authStep === 'ready') {
@@ -252,6 +271,12 @@ export class Accounts {
       this.activeSlot = slot;
       this.persist();
     }
+    this.changed();
+  }
+
+  // Another app (a browser's "Open in Telegram") opened a tg:// or t.me link.
+  openFromLink(url: string): void {
+    this.pendingLink = url;
     this.changed();
   }
 

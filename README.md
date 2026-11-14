@@ -22,6 +22,8 @@ _个人项目，与 Telegram 和华为无关。_
 
 **外观与网络**：深色模式（跟随系统或手动）、SOCKS5 / HTTP / MTProto 代理（登录前也能设置，支持测速和 t.me 代理链接）、连接状态提示。
 
+**外部链接**：浏览器或其他应用里的 `tg://` 链接（如 t.me 网页上的“Open in Telegram”按钮）会用 TdGram 打开，进入对应的用户、群组、频道、消息、机器人或代理设置；收到的邀请链接会先询问是否加入。系统也可能把 `https://t.me/…` 链接交给 TdGram，但没有 t.me 域名的应用链接验证，浏览器通常会自己打开这类网页。
+
 **私密聊天**：创建、端到端加密收发、状态提示、加密密钥图案比对。
 
 **聊天列表**：文件夹标签（带未读数）、归档、置顶、静音、标为已读/未读、删除或退出、搜索聊天和全局消息、在线状态；向左滑动一行可快速已读、置顶、归档；桌面图标显示未读数。
@@ -71,6 +73,8 @@ _个人项目，与 Telegram 和华为无关。_
    echo "sdk.dir=/path/to/ohos-sdk-7" > local.properties   # 其下有 26.0.0/{ets,js,native,previewer,toolchains}
    tools/build.sh    # 单元测试、TDLib 请求校验，然后 hvigor assembleHap
    ```
+
+   编译不应有 ArkTS 警告。`libtdbridge.so` 的导入按 `entry/src/main/cpp/types/libtdbridge/index.d.ts` 检查，`build.sh` 会在 `entry/oh_modules` 里建好指向它的链接。
 
    `check-td.mjs` 需要编译 TDLib 时用的 `td_api.tl`，可用 `--schema` 或环境变量 `TD_API_TL` 指定。
 

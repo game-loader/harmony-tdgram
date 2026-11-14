@@ -1,4 +1,3 @@
-import { router } from '@kit.ArkUI';
 import { QrView } from '../components/QrView';
 import { ProxyPane } from '../panes/ProxyPane';
 import { Nav } from '../common/Nav';
@@ -6,6 +5,7 @@ import { Account } from '../td/Account';
 import { Accounts } from '../td/Accounts';
 import { AccountEvent } from '../td/Core';
 import { TdError } from '../td/TdClient';
+import { replacePage } from '../common/Ui';
 
 @Entry
 @Component
@@ -88,7 +88,7 @@ struct Login {
     this.step = this.store.authStep;
     this.hint = this.store.authHint;
     if (this.step === 'ready') {
-      router.replaceUrl({ url: 'pages/Main' });
+      replacePage('pages/Main');
     } else if (this.step === 'qr') {
       this.qrLink = this.store.qrLink;
     }
@@ -183,7 +183,7 @@ struct Login {
           const ready = Accounts.get().all().find((a: Account) => a.authStep === 'ready');
           if (ready) {
             Accounts.get().switchTo(ready.slot);
-            router.replaceUrl({ url: 'pages/Main' });
+            replacePage('pages/Main');
           }
         })
       }

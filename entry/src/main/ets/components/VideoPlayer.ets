@@ -1,11 +1,12 @@
 import { common } from '@kit.AbilityKit';
-import { promptAction } from '@kit.ArkUI';
+
 import { AppState, ViewerItem } from '../common/AppState';
 import {
   boostSpeed, clock, dragBrightness, normalizeSpeed, resumeAt, SEEK_STEP, seekTarget, SPEEDS, speedLabel, tapZone
 } from '../common/VideoMath';
 import { Accounts } from '../td/Accounts';
 import { WindowCtl } from '../services/WindowCtl';
+import { toast } from '../common/Ui';
 
 interface DurationInfo {
   duration: number;
@@ -65,7 +66,7 @@ export struct VideoPlayer {
   }
 
   private ctx(): common.UIAbilityContext {
-    return getContext(this) as common.UIAbilityContext;
+    return this.getUIContext().getHostContext() as common.UIAbilityContext;
   }
 
   private awakeKey(): string {
@@ -294,7 +295,7 @@ export struct VideoPlayer {
             const at = resumeAt(AppState.videoPositions.get(this.item.fileId) ?? 0, this.duration);
             if (at > 0) {
               this.seekTo(at);
-              promptAction.showToast({ message: `从 ${clock(at)} 继续播放` });
+              toast(`从 ${clock(at)} 继续播放`);
             }
           }
           if (!this.active) {

@@ -1,9 +1,9 @@
-import { promptAction } from '@kit.ArkUI';
 import { PaneHeader } from '../components/PaneHeader';
 import { contentWidth } from '../common/Layout';
 import { Nav, Route } from '../common/Nav';
 import { Accounts } from '../td/Accounts';
 import { TdError } from '../td/TdClient';
+import { toast } from '../common/Ui';
 
 // Composes a poll for the chat (or forum topic) it was opened from.
 @Component
@@ -21,7 +21,7 @@ export struct PollPane {
   send(): void {
     const opts = this.options.map((s: string) => s.trim()).filter((s: string) => s.length > 0);
     if (!this.question.trim() || opts.length < 2) {
-      promptAction.showToast({ message: '请填写问题和至少两个选项' });
+      toast('请填写问题和至少两个选项');
       return;
     }
     if (this.busy) {
@@ -34,7 +34,7 @@ export struct PollPane {
         this.nav.pop();
       }).catch((e: TdError) => {
         this.busy = false;
-        promptAction.showToast({ message: `发送失败：${e.message}` });
+        toast(`发送失败：${e.message}`);
       });
   }
 
