@@ -63,6 +63,7 @@ export function fillContent(item: MsgItem, content: TdObject, nameOf: NameOf): v
   item.thumbPath = '';
   item.minithumb = '';
   item.linkUrl = '';
+  item.isEmoji = false;
   const type = content['@type'] as string;
   switch (type) {
     case 'messageText':
@@ -175,6 +176,23 @@ export function fillContent(item: MsgItem, content: TdObject, nameOf: NameOf): v
     case 'messageSticker': {
       item.kind = 'sticker';
       fillSticker(item, content['sticker'] as TdObject);
+      break;
+    }
+    case 'messageAnimatedEmoji': {
+      // A message that is just one emoji: drawn with its animated sticker,
+      // or as a large emoji while TDLib does not know the sticker yet.
+      const ae = content['animated_emoji'] as TdObject | undefined;
+      const s = ae ? ae['sticker'] as TdObject | undefined : undefined;
+      item.emoji = content['emoji'] as string;
+      item.isEmoji = true;
+      if (s) {
+        item.kind = 'sticker';
+        fillSticker(item, s);
+        item.emoji = content['emoji'] as string;
+      } else {
+        item.kind = 'text';
+        item.text = item.emoji;
+      }
       break;
     }
     case 'messagePoll': {
@@ -498,7 +516,7 @@ export function summary(m: MsgItem): string {
     case 'voice': return `🎤 语音 ${formatDuration(m.duration)}`;
     case 'audio': return `🎵 ${m.performer ? m.performer + ' - ' : ''}${m.title}`;
     case 'document': return `📎 ${m.fileName}`;
-    case 'sticker': return `${m.emoji} 贴纸`;
+    case 'sticker': return m.isEmoji ? m.emoji : `${m.emoji} 贴纸`;
     case 'poll': return `📊 ${m.pollQuestion}`;
     case 'location': return `📍 ${m.title || '位置'}`;
     case 'contact': return `👤 ${m.title}`;

@@ -1498,7 +1498,9 @@ export struct ChatView {
       if (this.canSend && p['can_be_replied']) {
         add('回复', () => { this.replyTo = m; });
       }
-      if (m.text) {
+      if (m.isEmoji) {
+        add('复制', () => copyText(m.emoji));
+      } else if (m.text) {
         add('复制', () => copyText(m.text));
         add('翻译', () => this.translateMessage(m));
       }
@@ -1525,7 +1527,7 @@ export struct ChatView {
       if (!this.threadId && !this.topicId && p['can_get_message_thread']) {
         add(m.isChannelPost ? '查看评论' : '查看回复', () => this.openThread(d));
       }
-      if (m.kind === 'sticker') {
+      if (m.kind === 'sticker' && !m.isEmoji) {
         add('添加到收藏的贴纸', () => {
           this.store.favoriteSticker(m.fileId).then(() => this.toast('已收藏')).catch((e: TdError) => this.toast(e.message));
         });

@@ -154,6 +154,7 @@ export class MsgItem {
   // Sticker
   stickerFormat: string = ''; // webp | tgs | webm
   emoji: string = '';
+  isEmoji: boolean = false; // a single animated emoji, not a sticker from a set
   // Voice and audio
   waveform: string = ''; // base64, 5-bit packed
   listened: boolean = true;

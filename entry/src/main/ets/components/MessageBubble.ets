@@ -726,7 +726,8 @@ export struct MessageBubble {
           this.Reply()
           if (this.data.msg.kind === 'sticker') {
             StickerView({ path: this.data.filePath, format: this.data.msg.stickerFormat,
-              thumbPath: this.data.thumbPath, side: this.stickerSide, autoplay: this.data.autoplay })
+              thumbPath: this.data.thumbPath, side: this.data.msg.isEmoji ? Math.round(this.stickerSide * 0.7) : this.stickerSide,
+              autoplay: this.data.autoplay })
               .onClick(() => this.tapOr(() => this.actions?.onOpenMedia(this.data)))
           } else if (this.data.msg.kind === 'videoNote') {
             this.VideoNote()
