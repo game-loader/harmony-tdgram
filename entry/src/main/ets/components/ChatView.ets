@@ -28,8 +28,7 @@ import { unifiedDataChannel, uniformTypeDescriptor } from '@kit.ArkData';
 import { AudioService, VoiceRecorder } from '../services/AudioService';
 import { EncodedVoice } from 'libtdbridge.so';
 import { dialog, openPage, toast } from '../common/Ui';
-import { isTelegramLink } from '../common/Links';
-import { openLinkTarget } from '../common/LinkOpen';
+import { confirmLeave, openLinkTarget, openUrl } from '../common/LinkOpen';
 
 class ReplyPreview {
   name: string = '';
@@ -1321,21 +1320,9 @@ export struct ChatView {
   }
 
   openUrl(url: string): void {
-    if (isTelegramLink(url)) {
-      this.acc.openLink(url).then((t: LinkTarget) => this.openTarget(t)).catch(() => this.toast('无法打开链接'));
-      return;
-    }
-    dialog({
-      title: '打开链接？', message: url,
-      buttons: [{ text: '复制', color: '#888888' }, { text: '打开', color: '#3A8DDE' }]
-    }).then((r: promptAction.ShowDialogSuccessResponse) => {
-      if (r.index === 1) {
-        this.ctx().openLink(url).catch(() => this.toast('没有可以打开此链接的应用'));
-      } else {
-        copyText(url);
-      }
-    });
+    openUrl(this.acc, this.nav, url, (t: LinkTarget) => this.openTarget(t));
   }
+
 
   private openProfile(userId: number, chatId: number): void {
     const r = this.nav.push('profile');
@@ -1746,6 +1733,11 @@ export struct ChatView {
         r.title = c.title;
         this.nav.commit();
       });
+    }
+    if (c.type === 'group' || c.type === 'supergroup' || c.type === 'channel') {
+      if (!this.joinable) {
+        add(c.type === 'channel' ? '退出频道' : '退出群组', () => confirmLeave(this.acc, this.nav, c), true);
+      }
     }
     add('清空聊天记录', () => {
       dialog({ title: '清空聊天记录？',

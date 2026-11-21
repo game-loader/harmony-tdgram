@@ -398,3 +398,25 @@ test('links: Telegram links are opened inside the app', () => {
     assert.equal(K.isTelegramLink(u), false, u);
   }
 });
+
+test('links: the URL a message is listed under', () => {
+  const url = { offset: 6, length: 9, type: { '@type': 'textEntityTypeUrl' } };
+  const textUrl = { offset: 0, length: 4, type: { '@type': 'textEntityTypeTextUrl', url: 'https://t.me/x' } };
+  assert.equal(K.firstUrl('see a t.me/news', [url], ''), 'https://t.me/news');
+  assert.equal(K.firstUrl('here and there', [textUrl, url], ''), 'https://t.me/x');
+  assert.equal(K.firstUrl('see a t.me/news', [url], 'https://preview.example/'), 'https://preview.example/');
+  assert.equal(K.firstUrl('no links', [], ''), '');
+});
+
+test('nav: leaving a chat closes its routes only', () => {
+  const nav = new Nav();
+  nav.openRootChat(1);
+  nav.openChat(2);
+  const p = nav.push('profile');
+  p.chatId = 2;
+  nav.commit();
+  nav.closeChat(2);
+  assert.deepEqual(nav.stack.map((r) => r.chatId), [1]);
+  nav.closeChat(3);
+  assert.equal(nav.stack.length, 1);
+});

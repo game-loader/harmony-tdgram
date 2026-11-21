@@ -275,7 +275,7 @@ export class Account implements AccountCore {
       'system_language_code': 'zh',
       'device_model': deviceInfo.marketName || deviceInfo.productModel || 'HarmonyOS',
       'system_version': deviceInfo.displayVersion || 'HarmonyOS',
-      'application_version': '0.5.3'
+      'application_version': '0.5.4'
     })).catch((e: Error) => {
       this.authHint = `初始化失败：${e.message}`;
       this.emit('auth');
@@ -450,6 +450,30 @@ export class Account implements AccountCore {
       r['@type'] === 'chatJoinResultSuccess' ? r['chat_id'] as number : 0);
   }
 
+  // True for the creator of a group or channel, who may delete it for everyone.
+  canDeleteForAll(chat: ChatItem): Promise<boolean> {
+    return this.td.send(o({ '@type': 'getChat', 'chat_id': chat.id })).then((c: TdObject) =>
+      (c['can_be_deleted_for_all_users'] as boolean) === true).catch(() => false);
+  }
+
+  // Deletes a group or channel with all its messages for every member.
+  deleteForAll(chat: ChatItem): Promise<TdObject> {
+    return this.td.send(o({ '@type': 'deleteChat', 'chat_id': chat.id }));
+  }
+
+  // Whether the account is in this group or channel.
+  isMember(chat: ChatItem): Promise<boolean> {
+    let req: TdObject;
+    if (chat.type === 'group') {
+      req = o({ '@type': 'getBasicGroup', 'basic_group_id': chat.groupId });
+    } else if (chat.type === 'supergroup' || chat.type === 'channel') {
+      req = o({ '@type': 'getSupergroup', 'supergroup_id': chat.groupId });
+    } else {
+      return Promise.resolve(true);
+    }
+    return this.td.send(req).then((g: TdObject) => memberOf(g['status'] as TdObject));
+  }
+
   join(chat: ChatItem): Promise<TdObject> {
     return this.td.send(o({ '@type': 'joinChat', 'chat_id': chat.id }));
   }
@@ -465,6 +489,20 @@ export class Account implements AccountCore {
 
   send(req: TdObject): Promise<TdObject> {
     return this.td.send(req);
+  }
+}
+
+// Left, banned, and restricted or creator accounts that are no longer in the chat are not members.
+function memberOf(status: TdObject): boolean {
+  switch (status['@type'] as string) {
+    case 'chatMemberStatusLeft':
+    case 'chatMemberStatusBanned':
+      return false;
+    case 'chatMemberStatusRestricted':
+    case 'chatMemberStatusCreator':
+      return (status['is_member'] as boolean) === true;
+    default:
+      return true;
   }
 }
 

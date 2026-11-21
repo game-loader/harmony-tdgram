@@ -148,6 +148,16 @@ export class Nav {
     return true;
   }
 
+  // The account left or deleted a chat: its routes (the chat, its threads,
+  // its profile) close and whatever was open below them shows again.
+  closeChat(chatId: number): void {
+    const kept = this.stack.filter((r: Route) => r.chatId !== chatId);
+    if (kept.length !== this.stack.length) {
+      this.stack = kept;
+      this.changed();
+    }
+  }
+
   clear(): void {
     if (this.stack.length > 0) {
       this.stack = [];

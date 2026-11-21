@@ -11,10 +11,15 @@ import { formatDuration, summary } from '../td/Parse';
 import { SearchPage } from '../td/MessageStore';
 import { o, TdError, TdObject } from '../td/TdClient';
 import { openPage, toast } from '../common/Ui';
+import { FormattedText } from '../components/FormattedText';
+import { confirmLeave, openMention, openUrl } from '../common/LinkOpen';
+import { firstUrl } from '../common/Links';
+import { pickAction } from '../common/Menu';
 
 interface FieldP {
   label: string;
   value: string;
+  copy?: string; // copied on tap instead of the value
 }
 
 interface ActionP {
@@ -73,6 +78,14 @@ export struct ProfilePane {
   @State username: string = '';
   @State phone: string = '';
   @State bio: string = '';
+  @State bioEntities: TdObject[] = [];
+  @State isChannel: boolean = false;
+  @State membership: number = 0; // groups and channels: 1 a member, -1 not, 0 unknown
+  // A linked chat: a channel's discussion group, a group's channel, a user's personal channel.
+  @State linkedId: number = 0;
+  @State linkedLabel: string = '';
+  @State linkedTitle: string = '';
+  @State inviteLink: string = '';
   @State idText: string = '';
   @State isUser: boolean = false;
   @State blocked: boolean = false;
@@ -152,6 +165,8 @@ export struct ProfilePane {
     this.acc.send(o({ '@type': 'getUserFullInfo', 'user_id': this.userId })).then((f: TdObject) => {
       const bio = f['bio'] as TdObject | undefined;
       this.bio = bio ? (bio['text'] as string) : '';
+      this.bioEntities = bio ? ((bio['entities'] as TdObject[]) ?? []) : [];
+      this.showLinked((f['personal_chat_id'] as number) ?? 0, '个人频道');
       const bl = f['block_list'] as TdObject | undefined;
       this.blocked = bl !== undefined && bl !== null;
     }).catch(() => {});
@@ -163,10 +178,15 @@ export struct ProfilePane {
     this.idText = String(c.id);
     const kind = c.type === 'channel' ? '频道' : '群组';
     this.subtitle = kind;
+    this.isChannel = c.type === 'channel';
+    this.acc.isMember(c).then((m: boolean) => { this.membership = m ? 1 : -1; }).catch(() => {});
     const req = c.type === 'group' ? o({ '@type': 'getBasicGroupFullInfo', 'basic_group_id': c.groupId }) :
       o({ '@type': 'getSupergroupFullInfo', 'supergroup_id': c.groupId });
     this.acc.send(req).then((f: TdObject) => {
-      this.bio = (f['description'] as string) ?? '';
+      this.setDescription((f['description'] as string) ?? '');
+      this.showLinked((f['linked_chat_id'] as number) ?? 0, c.type === 'channel' ? '讨论组' : '关联频道');
+      const link = f['invite_link'] as TdObject | undefined;
+      this.inviteLink = link ? (link['invite_link'] as string) ?? '' : '';
       const list = f['members'] as TdObject[] | undefined;
       const count = (f['member_count'] as number | undefined) ?? (list ? list.length : 0);
       this.subtitle = count ? `${kind} · ${count} 位${c.type === 'channel' ? '订阅者' : '成员'}` : kind;
@@ -188,6 +208,37 @@ export struct ProfilePane {
             .filter((m: MemberRow) => m.userId !== 0);
         }).catch(() => {});
     }
+  }
+
+  // Group and channel descriptions come as plain text; TDLib finds the links,
+  // @usernames and hashtags in them.
+  private setDescription(text: string): void {
+    this.bio = text;
+    this.bioEntities = [];
+    if (!text) {
+      return;
+    }
+    this.acc.send(o({ '@type': 'getTextEntities', 'text': text })).then((r: TdObject) => {
+      if (this.bio === text) {
+        this.bioEntities = (r['entities'] as TdObject[]) ?? [];
+      }
+    }).catch(() => {});
+  }
+
+  private showLinked(id: number, label: string): void {
+    if (!id) {
+      return;
+    }
+    this.linkedId = id;
+    this.linkedLabel = label;
+    const known = this.acc.chat(id);
+    if (known) {
+      this.linkedTitle = known.title;
+      return;
+    }
+    this.acc.send(o({ '@type': 'getChat', 'chat_id': id })).then((c: TdObject) => {
+      this.linkedTitle = (c['title'] as string) ?? '';
+    }).catch(() => {});
   }
 
   private member(m: TdObject): MemberRow {
@@ -283,6 +334,40 @@ export struct ProfilePane {
     openPage('pages/MediaViewer');
   }
 
+  private isLinksTab(): boolean {
+    return this.tabs[this.tab] !== undefined && this.tabs[this.tab].filter === 'searchMessagesFilterUrl';
+  }
+
+  private rowUrl(m: MsgItem): string {
+    return this.isLinksTab() ? firstUrl(m.text, m.entities, m.linkUrl) : '';
+  }
+
+  // A row of the links tab opens its link; other rows open the chat at the message.
+  private openRow(m: MsgItem): void {
+    const url = this.rowUrl(m);
+    if (url) {
+      openUrl(this.acc, this.nav, url);
+    } else {
+      this.nav.openChat(this.chatId, m.id);
+    }
+  }
+
+  private rowMenu(m: MsgItem): void {
+    const url = this.rowUrl(m);
+    if (!url) {
+      return;
+    }
+    pickAction(['打开链接', '跳到消息', '复制链接'], url).then((i: number) => {
+      if (i === 0) {
+        openUrl(this.acc, this.nav, url);
+      } else if (i === 1) {
+        this.nav.openChat(this.chatId, m.id);
+      } else if (i === 2) {
+        copyText(url);
+      }
+    }).catch(() => {});
+  }
+
   private rowTitle(m: MsgItem): string {
     if (m.kind === 'document' || m.kind === 'audio') {
       return m.fileName || m.title || '文件';
@@ -324,6 +409,24 @@ export struct ProfilePane {
     }
   }
 
+  join(): void {
+    const c = this.acc.chat(this.chatId);
+    if (!c) {
+      return;
+    }
+    this.acc.join(c).then(() => {
+      this.membership = 1;
+      toast(this.isChannel ? '已关注' : '已加入');
+    }).catch((e: TdError) => toast(e.message));
+  }
+
+  leave(): void {
+    const c = this.acc.chat(this.chatId);
+    if (c) {
+      confirmLeave(this.acc, this.nav, c);
+    }
+  }
+
   toggleBlock(): void {
     const req: TdObject = { '@type': 'setMessageSenderBlockList',
       'sender_id': o({ '@type': 'messageSenderUser', 'user_id': this.userId }) };
@@ -346,7 +449,25 @@ export struct ProfilePane {
       .alignItems(HorizontalAlign.Start)
       .padding({ left: 16, right: 16, top: 10, bottom: 10 })
       .width('100%')
-      .onClick(() => copyText(p.value))
+      .onClick(() => copyText(p.copy ?? p.value))
+    }
+  }
+
+  // The bio or description, with tappable links, @usernames and mentions.
+  @Builder
+  About() {
+    if (this.bio) {
+      Column({ space: 2 }) {
+        FormattedText({
+          text: this.bio, entities: this.bioEntities,
+          onLink: (u: string) => openUrl(this.acc, this.nav, u),
+          onMention: (n: string, id: number) => openMention(this.acc, this.nav, n, id)
+        })
+        Text(this.isUser ? '简介' : '描述').fontSize(12).fontColor($r('app.color.text_secondary'))
+      }
+      .alignItems(HorizontalAlign.Start)
+      .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+      .width('100%')
     }
   }
 
@@ -364,9 +485,11 @@ export struct ProfilePane {
         .fontColor($r('app.color.text_primary'))
       Text(this.subtitle).fontSize(14).fontColor($r('app.color.text_secondary')).margin({ top: 2, bottom: 12 })
       Column() {
-        this.Field({ label: '用户名', value: this.username ? '@' + this.username : '' })
+        this.Field({ label: '用户名（点击复制链接）', value: this.username ? '@' + this.username : '',
+          copy: `https://t.me/${this.username}` })
         this.Field({ label: '手机号', value: this.phone ? '+' + this.phone : '' })
-        this.Field({ label: this.isUser ? '简介' : '描述', value: this.bio })
+        this.About()
+        this.Field({ label: '邀请链接（点击复制）', value: this.inviteLink })
         this.Field({ label: 'ID（点击复制）', value: this.idText })
       }
       .borderRadius(12)
@@ -381,8 +504,18 @@ export struct ProfilePane {
         if (this.chatId && this.userId !== this.acc.myUserId) {
           this.Action({ label: this.muted ? '取消静音' : '静音', color: $r('app.color.text_primary'), fn: () => this.toggleMute() })
         }
+        if (this.linkedId) {
+          this.Action({ label: `${this.linkedLabel}：${this.linkedTitle || '打开'}`, color: $r('app.color.accent'),
+            fn: () => this.nav.openChat(this.linkedId) })
+        }
+        if (!this.isUser && this.membership === -1) {
+          this.Action({ label: this.isChannel ? '关注频道' : '加入群组', color: $r('app.color.accent'), fn: () => this.join() })
+        }
         if (this.isUser && this.userId !== this.acc.myUserId) {
           this.Action({ label: this.blocked ? '取消屏蔽' : '屏蔽', color: $r('app.color.danger'), fn: () => this.toggleBlock() })
+        }
+        if (!this.isUser && this.membership === 1) {
+          this.Action({ label: this.isChannel ? '退出频道' : '退出群组', color: $r('app.color.danger'), fn: () => this.leave() })
         }
       }
       .borderRadius(12)
@@ -508,8 +641,8 @@ export struct ProfilePane {
               .padding({ left: 14, right: 14, top: 9, bottom: 9 })
               .width('100%')
               .backgroundColor($r('app.color.card'))
-              // Opens the chat at this message.
-              .onClick(() => this.nav.openChat(this.chatId, m.id))
+              .onClick(() => this.openRow(m))
+              .gesture(LongPressGesture().onAction(() => this.rowMenu(m)))
             }
           }, (m: MsgItem) => `${m.id}`)
         }
