@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.example.tdgram",
     "vendor": "example",
-    "versionCode": 1030400,
-    "versionName": "0.5.4",
+    "versionCode": 1030500,
+    "versionName": "0.5.5",
     "icon": "$media:app_icon",
     "label": "$string:app_name"
   }

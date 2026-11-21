@@ -10,9 +10,11 @@ import { ChatItem, MsgItem } from '../td/Models';
 import { formatDuration, summary } from '../td/Parse';
 import { SearchPage } from '../td/MessageStore';
 import { o, TdError, TdObject } from '../td/TdClient';
-import { openPage, toast } from '../common/Ui';
+import { promptAction } from '@kit.ArkUI';
+import { dialog, openPage, toast } from '../common/Ui';
 import { FormattedText } from '../components/FormattedText';
-import { confirmLeave, openMention, openUrl } from '../common/LinkOpen';
+import { openMention, openUrl } from '../common/LinkOpen';
+import { confirmDelete, confirmLeave } from '../common/ChatActions';
 import { firstUrl } from '../common/Links';
 import { pickAction } from '../common/Menu';
 
@@ -89,6 +91,9 @@ export struct ProfilePane {
   @State idText: string = '';
   @State isUser: boolean = false;
   @State blocked: boolean = false;
+  @State isContact: boolean = false;
+  @State isBot: boolean = false;
+  @State inList: boolean = false; // the chat is in a chat list and can be deleted from it
   @State muted: boolean = false;
   @State tabs: SharedTab[] = [];
   @State tab: number = 0;
@@ -150,6 +155,7 @@ export struct ProfilePane {
   private refreshMuted(): void {
     const c = this.chatId ? this.acc.chat(this.chatId) : undefined;
     this.muted = c ? this.acc.chats.isMuted(c) : false;
+    this.inList = c !== undefined && c.positions.size > 0;
   }
 
   private loadUser(): void {
@@ -159,6 +165,8 @@ export struct ProfilePane {
       this.username = u.username;
       this.phone = this.userId === this.acc.myUserId && Accounts.get().settings.hidePhone ? '' : u.phone;
       this.subtitle = u.isBot ? '机器人' : lastSeen(u.status);
+      this.isContact = u.isContact;
+      this.isBot = u.isBot;
       this.photo = this.acc.files.path(u.photoFileId);
     }
     this.idText = String(this.userId);
@@ -427,13 +435,40 @@ export struct ProfilePane {
     }
   }
 
-  toggleBlock(): void {
-    const req: TdObject = { '@type': 'setMessageSenderBlockList',
-      'sender_id': o({ '@type': 'messageSenderUser', 'user_id': this.userId }) };
-    if (!this.blocked) {
-      req['block_list'] = o({ '@type': 'blockListMain' });
+  addContact(): void {
+    const u = this.acc.user(this.userId);
+    if (!u) {
+      return;
     }
-    this.acc.send(req).then(() => {
+    this.acc.addContact(u).then(() => {
+      this.isContact = true;
+      toast('已添加到联系人');
+    }).catch((e: TdError) => toast(e.message));
+  }
+
+  removeContact(): void {
+    dialog({ title: `从联系人中删除“${this.title}”？`,
+      buttons: [{ text: '取消', color: '#888888' }, { text: '删除', color: '#E84026' }] })
+      .then((r: promptAction.ShowDialogSuccessResponse) => {
+        if (r.index !== 1) {
+          return;
+        }
+        this.acc.removeContact(this.userId).then(() => {
+          this.isContact = false;
+          toast('已删除联系人');
+        }).catch((e: TdError) => toast(e.message));
+      }).catch(() => {});
+  }
+
+  deleteChat(): void {
+    const c = this.acc.chat(this.chatId);
+    if (c) {
+      confirmDelete(this.acc, this.nav, c);
+    }
+  }
+
+  toggleBlock(): void {
+    this.acc.setBlocked(this.userId, !this.blocked).then(() => {
       this.blocked = !this.blocked;
       toast(this.blocked ? '已屏蔽' : '已取消屏蔽');
     }).catch((e: TdError) => toast(e.message));
@@ -511,8 +546,17 @@ export struct ProfilePane {
         if (!this.isUser && this.membership === -1) {
           this.Action({ label: this.isChannel ? '关注频道' : '加入群组', color: $r('app.color.accent'), fn: () => this.join() })
         }
+        if (this.isUser && this.userId !== this.acc.myUserId && !this.isBot && !this.isContact) {
+          this.Action({ label: '添加到联系人', color: $r('app.color.accent'), fn: () => this.addContact() })
+        }
         if (this.isUser && this.userId !== this.acc.myUserId) {
           this.Action({ label: this.blocked ? '取消屏蔽' : '屏蔽', color: $r('app.color.danger'), fn: () => this.toggleBlock() })
+        }
+        if (this.isUser && this.isContact && this.userId !== this.acc.myUserId) {
+          this.Action({ label: '删除联系人', color: $r('app.color.danger'), fn: () => this.removeContact() })
+        }
+        if (this.isUser && this.inList) {
+          this.Action({ label: '删除聊天', color: $r('app.color.danger'), fn: () => this.deleteChat() })
         }
         if (!this.isUser && this.membership === 1) {
           this.Action({ label: this.isChannel ? '退出频道' : '退出群组', color: $r('app.color.danger'), fn: () => this.leave() })

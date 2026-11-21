@@ -74,6 +74,7 @@ export class UserItem {
   phone: string = '';
   isBot: boolean = false;
   isPremium: boolean = false;
+  isContact: boolean = false;
   status: TdObject | null = null;
   photoFileId: number = 0;
 

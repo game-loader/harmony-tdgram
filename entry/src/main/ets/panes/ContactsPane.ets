@@ -5,7 +5,9 @@ import { lastSeen } from '../common/Util';
 import { Accounts } from '../td/Accounts';
 import { UserItem } from '../td/Models';
 import { o, TdError, TdObject } from '../td/TdClient';
-import { toast } from '../common/Ui';
+import { promptAction } from '@kit.ArkUI';
+import { dialog, toast } from '../common/Ui';
+import { pickAction } from '../common/Menu';
 
 class ContactRow {
   id: number = 0;
@@ -54,6 +56,35 @@ export struct ContactsPane {
     const p = this.secretMode ? this.acc.startSecretChat(userId) : this.acc.privateChatWith(userId);
     p.then((chatId: number) => this.nav.replaceWithChat(chatId))
       .catch((e: TdError) => toast(e.message));
+  }
+
+  // Long press on a contact.
+  menu(r: ContactRow): void {
+    pickAction(['发消息', '查看资料', '删除联系人'], r.name).then((i: number) => {
+      if (i === 0) {
+        this.open(r.id);
+      } else if (i === 1) {
+        this.nav.push('profile').userId = r.id;
+        this.nav.commit();
+      } else if (i === 2) {
+        this.remove(r);
+      }
+    }).catch(() => {});
+  }
+
+  private remove(r: ContactRow): void {
+    dialog({ title: `从联系人中删除“${r.name}”？`,
+      buttons: [{ text: '取消', color: '#888888' }, { text: '删除', color: '#E84026' }] })
+      .then((d: promptAction.ShowDialogSuccessResponse) => {
+        if (d.index !== 1) {
+          return;
+        }
+        this.acc.removeContact(r.id).then(() => {
+          this.all = this.all.filter((x: ContactRow) => x.id !== r.id);
+          this.filter();
+          toast('已删除联系人');
+        }).catch((e: TdError) => toast(e.message));
+      }).catch(() => {});
   }
 
   findUsername(): void {
@@ -108,6 +139,7 @@ export struct ContactsPane {
             .padding({ left: 14, right: 14, top: 8, bottom: 8 })
             .width('100%')
             .onClick(() => this.open(r.id))
+            .gesture(LongPressGesture().onAction(() => this.menu(r)))
           }
         }, (r: ContactRow) => `${r.id}`)
       }

@@ -375,6 +375,7 @@ export class ChatStore {
     u.phone = raw['phone_number'] as string;
     u.isBot = ((raw['type'] as TdObject)['@type'] as string) === 'userTypeBot';
     u.isPremium = raw['is_premium'] as boolean;
+    u.isContact = (raw['is_contact'] as boolean) === true;
     u.status = raw['status'] as TdObject;
     const photo = raw['profile_photo'] as TdObject | undefined;
     u.photoFileId = photo ? (photo['small'] as TdObject)['id'] as number : 0;

@@ -1,4 +1,4 @@
-import { display, promptAction } from '@kit.ArkUI';
+import { display } from '@kit.ArkUI';
 import { ChatRow, ChatRowActions, ChatRowData } from '../components/ChatRow';
 import { ChatPane } from '../components/ChatPane';
 import { Avatar } from '../components/Avatar';
@@ -22,6 +22,7 @@ import { formatTime } from '../common/Util';
 import { pickAction } from '../common/Menu';
 import { dialog, replacePage, toast } from '../common/Ui';
 import { openLinkTarget } from '../common/LinkOpen';
+import { confirmDelete } from '../common/ChatActions';
 
 const MUTE_FOREVER = 0x7FFFFFFF;
 const DIVIDER_W = 12; // touch width of the divider between the panes
@@ -321,12 +322,16 @@ struct Main {
     return this.nav.back();
   }
 
-  private quick(p: Promise<Object>): void {
+  private closeSwipe(): void {
     try {
       this.listScroller.closeAllSwipeActions();
     } catch (e) {
       // The list is not shown.
     }
+  }
+
+  private quick(p: Promise<Object>): void {
+    this.closeSwipe();
     p.catch((e: Error) => toast(e.message));
   }
 
@@ -337,7 +342,11 @@ struct Main {
       row: row, archived: this.folderId === -1,
       onRead: (r: ChatRowData): void => this.quick(this.acc.markRead(r.chat, r.unread > 0 || r.markedUnread)),
       onPin: (r: ChatRowData): void => this.quick(this.acc.togglePin(r.chat, this.folderId, !r.pinned)),
-      onArchive: (r: ChatRowData): void => this.quick(this.acc.archive(r.chat, this.folderId !== -1))
+      onArchive: (r: ChatRowData): void => this.quick(this.acc.archive(r.chat, this.folderId !== -1)),
+      onDelete: (r: ChatRowData): void => {
+        this.closeSwipe();
+        confirmDelete(this.acc, this.nav, r.chat);
+      }
     })
   }
 
@@ -348,7 +357,7 @@ struct Main {
     const archived = this.folderId === -1;
     const labels = [row.pinned ? '取消置顶' : '置顶', row.muted ? '取消静音' : '静音',
       unread ? '标为已读' : '标为未读', archived ? '移出归档' : '归档',
-      c.type === 'private' || c.type === 'secret' ? '删除聊天' : '退出并删除'];
+      c.type === 'private' || c.type === 'secret' ? '删除聊天' : (c.type === 'channel' ? '退出频道' : '退出群组')];
     pickAction(labels, c.title).then((index: number) => {
       let p: Promise<Object>;
       switch (index) {
@@ -357,28 +366,11 @@ struct Main {
         case 2: p = this.acc.markRead(c, unread); break;
         case 3: p = this.acc.archive(c, !archived); break;
         default:
-          this.confirmDelete(c);
+          confirmDelete(this.acc, this.nav, c);
           return;
       }
       p.catch((e: Error) => toast(e.message));
     }).catch(() => {});
-  }
-
-  private confirmDelete(c: ChatItem): void {
-    const isPrivate = c.type === 'private';
-    const buttons: promptAction.Button[] = [{ text: '取消', color: '#888888' }, { text: '删除', color: '#E84026' }];
-    if (isPrivate) {
-      buttons.push({ text: '同时为对方删除', color: '#E84026' });
-    }
-    dialog({ title: `删除与“${c.title}”的聊天？`, buttons: buttons })
-      .then((r: promptAction.ShowDialogSuccessResponse) => {
-        if (r.index >= 1) {
-          if (this.nav.rootChatId() === c.id) {
-            this.nav.clear();
-          }
-          this.acc.deleteChat(c, r.index === 2).catch((e: Error) => toast(e.message));
-        }
-      });
   }
 
   @Builder

@@ -28,7 +28,8 @@ import { unifiedDataChannel, uniformTypeDescriptor } from '@kit.ArkData';
 import { AudioService, VoiceRecorder } from '../services/AudioService';
 import { EncodedVoice } from 'libtdbridge.so';
 import { dialog, openPage, toast } from '../common/Ui';
-import { confirmLeave, openLinkTarget, openUrl } from '../common/LinkOpen';
+import { openLinkTarget, openUrl } from '../common/LinkOpen';
+import { confirmDelete, confirmLeave } from '../common/ChatActions';
 
 class ReplyPreview {
   name: string = '';
@@ -1738,6 +1739,9 @@ export struct ChatView {
       if (!this.joinable) {
         add(c.type === 'channel' ? '退出频道' : '退出群组', () => confirmLeave(this.acc, this.nav, c), true);
       }
+    }
+    if (c.type === 'private' || c.type === 'secret') {
+      add('删除聊天', () => confirmDelete(this.acc, this.nav, c), true);
     }
     add('清空聊天记录', () => {
       dialog({ title: '清空聊天记录？',

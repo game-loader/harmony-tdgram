@@ -275,7 +275,7 @@ export class Account implements AccountCore {
       'system_language_code': 'zh',
       'device_model': deviceInfo.marketName || deviceInfo.productModel || 'HarmonyOS',
       'system_version': deviceInfo.displayVersion || 'HarmonyOS',
-      'application_version': '0.5.4'
+      'application_version': '0.5.5'
     })).catch((e: Error) => {
       this.authHint = `初始化失败：${e.message}`;
       this.emit('auth');
@@ -365,6 +365,27 @@ export class Account implements AccountCore {
   privateChatWith(userId: number): Promise<number> {
     return this.td.send(o({ '@type': 'createPrivateChat', 'user_id': userId, 'force': false }))
       .then((c: TdObject) => c['id'] as number);
+  }
+
+  // Saves a user to the contacts under the name they show, without sharing our phone number.
+  addContact(user: UserItem): Promise<TdObject> {
+    return this.td.send(o({ '@type': 'addContact', 'user_id': user.id, 'share_phone_number': false,
+      'contact': o({ '@type': 'importedContact', 'phone_number': user.phone, 'first_name': user.firstName || user.name(),
+        'last_name': user.lastName, 'note': o({ '@type': 'formattedText', 'text': '', 'entities': [] }) }) }));
+  }
+
+  removeContact(userId: number): Promise<TdObject> {
+    return this.td.send(o({ '@type': 'removeContacts', 'user_ids': [userId] }));
+  }
+
+  // Puts a user (or bot) on the block list, or takes them off it.
+  setBlocked(userId: number, blocked: boolean): Promise<TdObject> {
+    const req: TdObject = { '@type': 'setMessageSenderBlockList',
+      'sender_id': o({ '@type': 'messageSenderUser', 'user_id': userId }) };
+    if (blocked) {
+      req['block_list'] = o({ '@type': 'blockListMain' });
+    }
+    return this.td.send(req);
   }
 
   setAutoDelete(chat: ChatItem, seconds: number): Promise<TdObject> {

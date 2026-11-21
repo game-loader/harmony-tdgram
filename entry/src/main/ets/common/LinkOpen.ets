@@ -3,7 +3,6 @@ import { common } from '@kit.AbilityKit';
 import { Account, LinkTarget } from '../td/Account';
 import { Accounts } from '../td/Accounts';
 import { TdError } from '../td/TdClient';
-import { ChatItem } from '../td/Models';
 import { copyText } from './AppState';
 import { isTelegramLink } from './Links';
 import { Nav } from './Nav';
@@ -97,30 +96,4 @@ export function openMention(acc: Account, nav: Nav, name: string, userId: number
   } else if (name) {
     copyText(name);
   }
-}
-
-// Leaving a group or channel, after asking. Its creator can also delete it
-// for everyone. The chat's routes close afterwards.
-export function confirmLeave(acc: Account, nav: Nav, c: ChatItem): void {
-  const what = c.type === 'channel' ? '频道' : '群组';
-  acc.canDeleteForAll(c).then((canDelete: boolean) => {
-    const buttons: promptAction.Button[] = [{ text: '取消', color: '#888888' }, { text: '退出', color: '#E84026' }];
-    if (canDelete) {
-      buttons.push({ text: `删除${what}`, color: '#E84026' });
-    }
-    return dialog({
-      title: `退出${what}“${c.title}”？`,
-      message: canDelete ? `删除${what}会移除所有成员和消息，无法恢复。` : undefined,
-      buttons: buttons
-    });
-  }).then((r: promptAction.ShowDialogSuccessResponse) => {
-    if (r.index < 1) {
-      return;
-    }
-    const p = r.index === 2 ? acc.deleteForAll(c) : acc.deleteChat(c, false);
-    p.then(() => {
-      nav.closeChat(c.id);
-      toast(r.index === 2 ? `已删除${what}` : `已退出${what}`);
-    }).catch((e: Error) => toast(e.message));
-  }).catch(() => {});
 }

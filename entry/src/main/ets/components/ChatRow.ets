@@ -154,6 +154,7 @@ export struct ChatRowActions {
   onRead: (row: ChatRowData) => void = (): void => {};
   onPin: (row: ChatRowData) => void = (): void => {};
   onArchive: (row: ChatRowData) => void = (): void => {};
+  onDelete: (row: ChatRowData) => void = (): void => {};
 
   build() {
     Row() {
@@ -166,6 +167,9 @@ export struct ChatRowActions {
       Text(this.archived ? '移出归档' : '归档').fontSize(14).fontColor(Color.White)
         .width(64).height('100%').textAlign(TextAlign.Center).backgroundColor('#8E99A4')
         .onClick(() => this.onArchive(this.row))
+      Text(this.row.chat.type === 'private' || this.row.chat.type === 'secret' ? '删除' : '退出').fontSize(14)
+        .fontColor(Color.White).width(64).height('100%').textAlign(TextAlign.Center).backgroundColor('#E84026')
+        .onClick(() => this.onDelete(this.row))
     }
     .height('100%')
   }
