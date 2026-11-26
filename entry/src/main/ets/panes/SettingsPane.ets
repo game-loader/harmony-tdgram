@@ -17,6 +17,9 @@ interface ItemP {
   value: string;
   color: ResourceColor;
   fn: () => void;
+  glyph?: Resource;
+  tile?: string; // color of the rounded square behind the symbol
+  arrow?: boolean; // opens another page
 }
 
 interface SwitchP {
@@ -24,6 +27,8 @@ interface SwitchP {
   detail: string;
   on: boolean;
   fn: (v: boolean) => void;
+  glyph?: Resource;
+  tile?: string;
 }
 
 class AccountRow {
@@ -173,13 +178,25 @@ export struct SettingsPane {
 
   @Builder
   Section(title: string) {
-    Text(title).fontSize(13).fontColor($r('app.color.accent')).padding({ left: 16, top: 16, bottom: 6 }).width('100%')
+    Text(title).fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_secondary'))
+      .padding({ left: 18, top: 22, bottom: 8 }).width('100%')
+  }
+
+  @Builder
+  Tile(glyph: Resource, tile: string) {
+    Stack() {
+      SymbolGlyph(glyph).fontSize(17).fontColor([Color.White])
+    }
+    .width(30).height(30).borderRadius(9).backgroundColor(tile)
   }
 
   @Builder
   Switch(p: SwitchP) {
-    Row() {
-      Column({ space: 2 }) {
+    Row({ space: 14 }) {
+      if (p.glyph) {
+        this.Tile(p.glyph, p.tile ?? '#7D8A99')
+      }
+      Column({ space: 3 }) {
         Text(p.label).fontSize(16).fontColor($r('app.color.text_primary'))
         if (p.detail) {
           Text(p.detail).fontSize(12).fontColor($r('app.color.text_secondary'))
@@ -187,22 +204,51 @@ export struct SettingsPane {
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
-      Toggle({ type: ToggleType.Switch, isOn: p.on }).onChange((v: boolean) => p.fn(v))
+      Toggle({ type: ToggleType.Switch, isOn: p.on }).selectedColor($r('app.color.accent'))
+        .onChange((v: boolean) => p.fn(v))
     }
-    .padding({ left: 16, right: 12, top: 10, bottom: 10 })
+    .padding({ left: 16, right: 12, top: 11, bottom: 11 })
     .width('100%')
   }
 
   @Builder
   Item(p: ItemP) {
-    Row({ space: 8 }) {
+    Row({ space: 14 }) {
+      if (p.glyph) {
+        this.Tile(p.glyph, p.tile ?? '#7D8A99')
+      }
       Text(p.label).fontSize(16).fontColor(p.color).layoutWeight(1)
       Text(p.value).fontSize(14).fontColor($r('app.color.text_secondary')).maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis }).constraintSize({ maxWidth: '60%' })
+        .textOverflow({ overflow: TextOverflow.Ellipsis }).constraintSize({ maxWidth: '55%' })
+      if (p.arrow) {
+        SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([$r('app.color.text_secondary')])
+          .margin({ left: -6 })
+      }
     }
-    .padding({ left: 16, right: 16, top: 14, bottom: 14 })
+    .padding({ left: 16, right: 14, top: p.glyph ? 11 : 14, bottom: p.glyph ? 11 : 14 })
     .width('100%')
     .onClick(() => p.fn())
+  }
+
+  // The active account, large, at the top of the page.
+  @Builder
+  Profile() {
+    ForEach(this.accounts.filter((a: AccountRow) => a.active), (a: AccountRow) => {
+      Column({ space: 6 }) {
+        Avatar({ title: a.name, seed: a.userId, path: a.photo, side: 88 })
+        Text(a.name).fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+          .letterSpacing(-0.4).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).margin({ top: 8 })
+        if (a.phone) {
+          Text(a.phone).fontSize(15).fontColor($r('app.color.text_secondary'))
+        }
+      }
+      .width('100%')
+      .padding({ top: 12, bottom: 4 })
+      .onClick(() => {
+        this.nav.push('profile').userId = this.mgr.active().myUserId;
+        this.nav.commit();
+      })
+    }, (a: AccountRow) => `${a.slot}|${a.name}|${a.phone}|${a.photo}`)
   }
 
   build() {
@@ -210,6 +256,7 @@ export struct SettingsPane {
       PaneHeader({ title: '设置', showBack: this.showBack, onBack: (): void => { this.nav.pop(); } })
       Scroll() {
         Column() {
+          this.Profile()
           this.Section('账号')
           Column() {
             ForEach(this.accounts, (a: AccountRow) => {
@@ -222,7 +269,7 @@ export struct SettingsPane {
                 .alignItems(HorizontalAlign.Start)
                 .layoutWeight(1)
                 if (a.active) {
-                  Text('✓').fontSize(18).fontColor($r('app.color.accent'))
+                  SymbolGlyph($r('sys.symbol.checkmark')).fontSize(20).fontColor([$r('app.color.accent')])
                 }
               }
               .padding({ left: 16, right: 16, top: 8, bottom: 8 })
@@ -234,86 +281,86 @@ export struct SettingsPane {
               })
             }, (a: AccountRow) => `${a.slot}|${a.name}|${a.active}|${a.photo}`)
             // The main page moves to the login screen for the new account.
-            this.Item({ label: '＋ 添加账号', value: '', color: $r('app.color.accent'), fn: () => {
+            this.Item({ label: '添加账号', glyph: $r('sys.symbol.person_badge_plus'), tile: '#2F6BFF', value: '', color: $r('app.color.accent'), fn: () => {
               this.mgr.add();
             } })
-            this.Item({ label: '我的资料与 ID', value: '', color: $r('app.color.text_primary'), fn: () => {
+            this.Item({ label: '我的资料与 ID', glyph: $r('sys.symbol.person_crop_circle_fill'), tile: '#12A5BA', arrow: true, value: '', color: $r('app.color.text_primary'), fn: () => {
               this.nav.push('profile').userId = this.mgr.active().myUserId;
               this.nav.commit();
             } })
           }
-          .borderRadius(12)
+          .borderRadius(16)
           .backgroundColor($r('app.color.card'))
 
           this.Section('外观与布局')
           Column() {
-            this.Item({ label: '主题', value: THEME_NAMES[Math.max(0, THEMES.indexOf(this.s.theme))], color: $r('app.color.text_primary'), fn: () => {
+            this.Item({ label: '主题', glyph: $r('sys.symbol.moon_fill'), tile: '#6E5BD9', value: THEME_NAMES[Math.max(0, THEMES.indexOf(this.s.theme))], color: $r('app.color.text_primary'), fn: () => {
               pickAction(THEME_NAMES).then((index: number) => {
                 this.update((s: AppSettings) => { s.theme = THEMES[index]; });
                 this.mgr.applyTheme();
               }).catch(() => {});
             } })
-            this.Item({ label: '折叠屏分栏', value: SPLIT_NAMES[Math.max(0, SPLITS.indexOf(this.s.splitMode))], color: $r('app.color.text_primary'), fn: () => {
+            this.Item({ label: '折叠屏分栏', glyph: $r('sys.symbol.rectangle_split_2x1'), tile: '#2F6BFF', value: SPLIT_NAMES[Math.max(0, SPLITS.indexOf(this.s.splitMode))], color: $r('app.color.text_primary'), fn: () => {
                 pickAction(SPLIT_NAMES).then((index: number) => {
                   this.update((s: AppSettings) => { s.splitMode = SPLITS[index]; });
                 }).catch(() => {});
               } })
             if (this.s.listWidth > 0) {
-              this.Item({ label: '恢复默认分栏宽度', value: '也可以双击分隔条', color: $r('app.color.text_primary'), fn: () => {
+              this.Item({ label: '恢复默认分栏宽度', glyph: $r('sys.symbol.arrow_counterclockwise'), tile: '#7D8A99', value: '也可以双击分隔条', color: $r('app.color.text_primary'), fn: () => {
                 this.update((s: AppSettings) => { s.listWidth = 0; });
               } })
             }
           }
-          .borderRadius(12)
+          .borderRadius(16)
           .backgroundColor($r('app.color.card'))
 
           this.Section('网络')
           Column() {
-            this.Item({ label: '代理', value: this.proxyText(), color: $r('app.color.text_primary'), fn: () => {
+            this.Item({ label: '代理', glyph: $r('sys.symbol.wifi'), tile: '#2FAE5A', arrow: true, value: this.proxyText(), color: $r('app.color.text_primary'), fn: () => {
               this.nav.push('proxy');
               this.nav.commit();
             } })
           }
-          .borderRadius(12)
+          .borderRadius(16)
           .backgroundColor($r('app.color.card'))
 
           this.Section('隐私（Nicegram 风格）')
           Column() {
-            this.Switch({ label: '幽灵模式', detail: '不发送已读回执和“正在输入”，并显示为离线', on: this.s.ghostMode, fn: (v: boolean) => this.update((s: AppSettings) => { s.ghostMode = v; }) })
-            this.Switch({ label: '隐藏我的手机号', detail: '在本应用界面中不显示自己的手机号', on: this.s.hidePhone, fn: (v: boolean) => this.update((s: AppSettings) => { s.hidePhone = v; }) })
+            this.Switch({ label: '幽灵模式', glyph: $r('sys.symbol.eye_slash'), tile: '#4B5563', detail: '不发送已读回执和“正在输入”，并显示为离线', on: this.s.ghostMode, fn: (v: boolean) => this.update((s: AppSettings) => { s.ghostMode = v; }) })
+            this.Switch({ label: '隐藏我的手机号', glyph: $r('sys.symbol.phone_fill'), tile: '#2FAE5A', detail: '在本应用界面中不显示自己的手机号', on: this.s.hidePhone, fn: (v: boolean) => this.update((s: AppSettings) => { s.hidePhone = v; }) })
           }
-          .borderRadius(12)
+          .borderRadius(16)
           .backgroundColor($r('app.color.card'))
 
           this.Section('聊天')
           Column() {
-            this.Switch({ label: 'Markdown 格式', detail: '发送时把 **粗体**、__斜体__、`代码` 转成格式文字', on: this.s.markdown, fn: (v: boolean) => this.update((s: AppSettings) => { s.markdown = v; }) })
-            this.Switch({ label: '自动播放 GIF 和贴纸', detail: '', on: this.s.autoplayGifs, fn: (v: boolean) => this.update((s: AppSettings) => { s.autoplayGifs = v; }) })
-            this.Switch({ label: '自动下载小于 10 MB 的 GIF', detail: '', on: this.s.autoDownloadMedia, fn: (v: boolean) => this.update((s: AppSettings) => { s.autoDownloadMedia = v; }) })
-            this.Item({ label: '消息过滤（屏蔽广告）', value: this.filterText, color: $r('app.color.text_primary'), fn: () => {
+            this.Switch({ label: 'Markdown 格式', glyph: $r('sys.symbol.doc_text_fill'), tile: '#12A5BA', detail: '发送时把 **粗体**、__斜体__、`代码` 转成格式文字', on: this.s.markdown, fn: (v: boolean) => this.update((s: AppSettings) => { s.markdown = v; }) })
+            this.Switch({ label: '自动播放 GIF 和贴纸', glyph: $r('sys.symbol.play_fill'), tile: '#E5487A', detail: '', on: this.s.autoplayGifs, fn: (v: boolean) => this.update((s: AppSettings) => { s.autoplayGifs = v; }) })
+            this.Switch({ label: '自动下载小于 10 MB 的 GIF', glyph: $r('sys.symbol.arrow_down_circle'), tile: '#F09A2E', detail: '', on: this.s.autoDownloadMedia, fn: (v: boolean) => this.update((s: AppSettings) => { s.autoDownloadMedia = v; }) })
+            this.Item({ label: '消息过滤（屏蔽广告）', glyph: $r('sys.symbol.nosign'), tile: '#E5484D', arrow: true, value: this.filterText, color: $r('app.color.text_primary'), fn: () => {
               this.nav.push('filters');
               this.nav.commit();
             } })
-            this.Item({ label: '翻译目标语言', value: LANG_NAMES[Math.max(0, LANGS.indexOf(this.s.translateTo))], color: $r('app.color.text_primary'), fn: () => {
+            this.Item({ label: '翻译目标语言', glyph: $r('sys.symbol.translate'), tile: '#2F6BFF', value: LANG_NAMES[Math.max(0, LANGS.indexOf(this.s.translateTo))], color: $r('app.color.text_primary'), fn: () => {
                 pickAction(LANG_NAMES).then((index: number) => {
                   this.update((s: AppSettings) => { s.translateTo = LANGS[index]; });
                 }).catch(() => {});
               } })
           }
-          .borderRadius(12)
+          .borderRadius(16)
           .backgroundColor($r('app.color.card'))
 
           this.Section('通知')
           Column() {
-            this.Switch({ label: '消息通知', detail: 'App 在前台或刚切到后台时有效，退到后台被系统冻结后无法收到', on: this.s.notifications, fn: (v: boolean) => this.update((s: AppSettings) => { s.notifications = v; }) })
-            this.Switch({ label: '显示消息内容', detail: '', on: this.s.notifyPreview, fn: (v: boolean) => this.update((s: AppSettings) => { s.notifyPreview = v; }) })
+            this.Switch({ label: '消息通知', glyph: $r('sys.symbol.bell_fill'), tile: '#E5484D', detail: 'App 在前台或刚切到后台时有效，退到后台被系统冻结后无法收到', on: this.s.notifications, fn: (v: boolean) => this.update((s: AppSettings) => { s.notifications = v; }) })
+            this.Switch({ label: '显示消息内容', glyph: $r('sys.symbol.message_fill'), tile: '#F09A2E', detail: '', on: this.s.notifyPreview, fn: (v: boolean) => this.update((s: AppSettings) => { s.notifyPreview = v; }) })
           }
-          .borderRadius(12)
+          .borderRadius(16)
           .backgroundColor($r('app.color.card'))
 
           this.Section('设备与存储')
           Column() {
-            this.Item({ label: '已登录的设备', value: this.sessions.length > 0 ? '点击其他设备可终止' : '', color: $r('app.color.text_primary'), fn: () => this.loadSessions() })
+            this.Item({ label: '已登录的设备', glyph: $r('sys.symbol.rectangle_portrait'), tile: '#6E5BD9', value: this.sessions.length > 0 ? '点击其他设备可终止' : '', color: $r('app.color.text_primary'), fn: () => this.loadSessions() })
             ForEach(this.sessions, (r: SessionRow) => {
               Column({ space: 2 }) {
                 Text(`${r.title}${r.current ? '（当前）' : ''}`).fontSize(15).fontColor($r('app.color.text_primary'))
@@ -328,15 +375,15 @@ export struct SettingsPane {
                 }
               })
             }, (r: SessionRow) => r.id)
-            this.Item({ label: '清理缓存', value: this.storage, color: $r('app.color.text_primary'), fn: () => this.clearCache() })
+            this.Item({ label: '清理缓存', glyph: $r('sys.symbol.externaldrive_fill'), tile: '#12A5BA', value: this.storage, color: $r('app.color.text_primary'), fn: () => this.clearCache() })
           }
-          .borderRadius(12)
+          .borderRadius(16)
           .backgroundColor($r('app.color.card'))
 
           Column() {
             this.Item({ label: '退出当前账号', value: '', color: $r('app.color.danger'), fn: () => this.logOut() })
           }
-          .borderRadius(12)
+          .borderRadius(16)
           .backgroundColor($r('app.color.card'))
           .margin({ top: 16 })
 

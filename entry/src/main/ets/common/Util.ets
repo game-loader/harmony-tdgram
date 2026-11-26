@@ -78,6 +78,17 @@ export function avatarColor(id: number): string {
   return AVATAR_COLORS[Math.abs(id) % AVATAR_COLORS.length];
 }
 
+// Lighter top-left and deeper bottom-right tone for each avatar color, in
+// the same order as AVATAR_COLORS.
+const AVATAR_GRADIENTS: string[][] = [
+  ['#FF8A8F', '#D9506B'], ['#FFC07A', '#F07F43'], ['#BBA6FF', '#7E66E0'], ['#8EE07A', '#43B35A'],
+  ['#74E0D8', '#2DA6B5'], ['#7CC4FF', '#3F7FE6'], ['#FF9AC6', '#D9579A']
+];
+
+export function avatarGradient(id: number): string[] {
+  return AVATAR_GRADIENTS[Math.abs(id) % AVATAR_GRADIENTS.length];
+}
+
 /**
  * TDLib needs a real filesystem path, but pickers return content URIs, so
  * the picked file is copied into the app's cache directory first.

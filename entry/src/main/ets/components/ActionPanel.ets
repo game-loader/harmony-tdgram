@@ -27,8 +27,11 @@ export struct ActionPanel {
     Stack({ alignContent: Alignment.Bottom }) {
       Column().width('100%').height('100%').backgroundColor($r('app.color.scrim')).onClick(() => this.onClose())
       Column() {
+        // Grab handle: the sheet closes with a tap outside it.
+        Column().width(36).height(4).borderRadius(2).backgroundColor($r('app.color.separator'))
+          .margin({ top: 8, bottom: 2 })
         if (this.title) {
-          Text(this.title).fontSize(13).fontColor($r('app.color.text_secondary')).maxLines(1)
+          Text(this.title).fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_secondary')).maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis }).padding({ left: 18, right: 18, top: 12, bottom: 4 })
             .width('100%')
         }
@@ -36,8 +39,8 @@ export struct ActionPanel {
           Scroll() {
             Row({ space: 4 }) {
               ForEach(this.emojis, (e: string) => {
-                Text(e).fontSize(26).width(46).height(46).textAlign(TextAlign.Center).borderRadius(23)
-                  .backgroundColor(this.chosen.includes(e) ? $r('app.color.accent_soft') : Color.Transparent)
+                Text(e).fontSize(26).width(48).height(48).textAlign(TextAlign.Center).borderRadius(24)
+                  .backgroundColor(this.chosen.includes(e) ? $r('app.color.accent_soft') : $r('app.color.input_bg'))
                   .onClick(() => {
                     this.onClose();
                     this.onEmoji(e);
@@ -69,10 +72,10 @@ export struct ActionPanel {
       }
       .width('100%')
       .constraintSize({ maxWidth: 440 })
-      .padding({ bottom: 8 })
-      .borderRadius({ topLeft: 18, topRight: 18 })
+      .padding({ bottom: 12 })
+      .borderRadius({ topLeft: 26, topRight: 26 })
       .backgroundColor($r('app.color.card'))
-      .shadow({ radius: 16, color: '#33000000' })
+      .shadow({ radius: 28, color: '#33000000' })
       .transition(TransitionEffect.move(TransitionEdge.BOTTOM).animation({ duration: 180 }))
     }
     .width('100%')

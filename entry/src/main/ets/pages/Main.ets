@@ -2,6 +2,7 @@ import { display } from '@kit.ArkUI';
 import { ChatRow, ChatRowActions, ChatRowData } from '../components/ChatRow';
 import { ChatPane } from '../components/ChatPane';
 import { Avatar } from '../components/Avatar';
+import { IconButton } from '../components/IconButton';
 import { ContactsPane } from '../panes/ContactsPane';
 import { FiltersPane } from '../panes/FiltersPane';
 import { ForwardPane } from '../panes/ForwardPane';
@@ -376,7 +377,7 @@ struct Main {
   @Builder
   Tabs() {
     Scroll() {
-      Row({ space: 4 }) {
+      Row({ space: 2 }) {
         this.Tab(0, '全部')
         ForEach(this.folders, (f: FolderItem) => {
           this.Tab(f.id, f.name)
@@ -388,22 +389,28 @@ struct Main {
     .scrollBar(BarState.Off)
     .height(40)
     .width('100%')
+    .border({ width: { bottom: 0.5 }, color: $r('app.color.separator') })
   }
 
+  // Folder tabs: the chosen one is bold and underlined in the accent color.
   @Builder
   Tab(id: number, name: string) {
-    Row({ space: 5 }) {
-      Text(name).fontSize(14).fontColor(this.folderId === id ? Color.White : $r('app.color.text_primary'))
-      if (this.unreadOf(id) > 0) {
-        Text(this.unreadOf(id) > 99 ? '99+' : String(this.unreadOf(id))).fontSize(11)
-          .padding({ left: 5, right: 5 }).height(16).borderRadius(8)
-          .fontColor(this.folderId === id ? $r('app.color.accent') : Color.White)
-          .backgroundColor(this.folderId === id ? Color.White : $r('app.color.accent'))
+    Column({ space: 6 }) {
+      Row({ space: 5 }) {
+        Text(name).fontSize(15)
+          .fontWeight(this.folderId === id ? FontWeight.Bold : FontWeight.Medium)
+          .fontColor(this.folderId === id ? $r('app.color.accent') : $r('app.color.text_secondary'))
+        if (this.unreadOf(id) > 0) {
+          Text(this.unreadOf(id) > 99 ? '99+' : String(this.unreadOf(id))).fontSize(11).fontWeight(FontWeight.Bold)
+            .padding({ left: 5, right: 5 }).height(17).constraintSize({ minWidth: 17 }).textAlign(TextAlign.Center)
+            .borderRadius(8.5).fontColor(Color.White)
+            .backgroundColor(this.folderId === id ? $r('app.color.accent') : $r('app.color.text_secondary'))
+        }
       }
+      Column().height(3).width('100%').borderRadius(1.5)
+        .backgroundColor(this.folderId === id ? $r('app.color.accent') : Color.Transparent)
     }
-    .padding({ left: 14, right: 14, top: 6, bottom: 6 })
-    .borderRadius(16)
-    .backgroundColor(this.folderId === id ? $r('app.color.accent') : $r('app.color.chip'))
+    .padding({ left: 10, right: 10, top: 8 })
     .onClick(() => this.selectFolder(id))
   }
 
@@ -444,15 +451,25 @@ struct Main {
   Detail() {
     Stack() {
       if (this.stack.length === 0) {
-        Column() {
-          Text('选择一个聊天开始').fontSize(14).fontColor(Color.White)
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 }).borderRadius(14)
-            .backgroundColor($r('app.color.service_bg'))
+        Column({ space: 14 }) {
+          Stack() {
+            SymbolGlyph($r('sys.symbol.message_on_message_fill')).fontSize(44).fontColor([Color.White])
+          }
+          .width(96)
+          .height(96)
+          .borderRadius(32)
+          .linearGradient({ angle: 135, colors: [[$r('app.color.accent'), 0], [$r('app.color.accent_end'), 1]] })
+          .shadow({ radius: 24, color: '#332F6BFF', offsetY: 8 })
+          Text('选择一个聊天').fontSize(20).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+            .margin({ top: 6 })
+          Text('从左侧列表打开聊天，拖动分隔条可以调整两栏宽度').fontSize(14)
+            .fontColor($r('app.color.text_secondary')).textAlign(TextAlign.Center)
+            .constraintSize({ maxWidth: 280 })
         }
         .width('100%')
         .height('100%')
         .justifyContent(FlexAlign.Center)
-        .backgroundColor($r('app.color.chat_bg'))
+        .linearGradient({ angle: 180, colors: [[$r('app.color.chat_bg'), 0], [$r('app.color.chat_bg_end'), 1]] })
       }
       ForEach(this.stack, (r: Route, i: number) => {
         Column() {
@@ -472,9 +489,13 @@ struct Main {
   // the default width.
   @Builder
   Divider() {
-    Column() {
+    Stack() {
       Column().width(this.dragW > 0 ? 3 : 0.5).height('100%')
         .backgroundColor(this.dragW > 0 ? $r('app.color.accent') : $r('app.color.separator'))
+      // A small grip shows that the divider can be dragged.
+      Column().width(4).height(36).borderRadius(2)
+        .backgroundColor(this.dragW > 0 ? $r('app.color.accent') : $r('app.color.text_secondary'))
+        .opacity(this.dragW > 0 ? 1 : 0.35)
     }
     .width(DIVIDER_W)
     .height('100%')
@@ -526,35 +547,46 @@ struct Main {
     Column() {
       Row({ space: 10 }) {
         if (this.folderId === -1) {
-          Button('‹', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(26).onClick(() => this.selectFolder(0))
-          Text('归档').fontSize(22).fontWeight(FontWeight.Bold).layoutWeight(1).fontColor($r('app.color.text_primary'))
+          IconButton({ glyph: $r('sys.symbol.chevron_left'), tint: $r('app.color.text_primary'), glyphSize: 24 })
+            .margin({ left: -10 })
+            .onClick(() => this.selectFolder(0))
+          Text('归档').fontSize(28).fontWeight(FontWeight.Bold).layoutWeight(1).fontColor($r('app.color.text_primary'))
+            .letterSpacing(-0.5)
         } else {
+          Column({ space: 1 }) {
+            Text('TdGram').fontSize(28).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+              .letterSpacing(-0.6)
+            if (this.connection) {
+              Row({ space: 6 }) {
+                LoadingProgress().width(14).height(14).color($r('app.color.accent'))
+                Text(this.connection).fontSize(13).fontColor($r('app.color.accent'))
+              }
+            }
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+          IconButton({ glyph: $r('sys.symbol.square_and_pencil'), tint: $r('app.color.accent'), glyphSize: 22 })
+            .onClick(() => {
+              this.nav.openRoot('contacts');
+              this.nav.commit();
+            })
           Avatar({ title: this.myName, seed: this.acc.myUserId, path: this.myPhoto, side: 36 })
             .onClick(() => {
               this.nav.openRoot('settings');
               this.nav.commit();
             })
-          Column() {
-            Text('TdGram').fontSize(22).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
-            if (this.connection) {
-              Text(this.connection).fontSize(12).fontColor($r('app.color.accent'))
-            }
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-          Button('✎', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(20)
-            .onClick(() => {
-              this.nav.openRoot('contacts');
-              this.nav.commit();
-            })
         }
       }
-      .padding({ left: 14, right: 6, top: 6, bottom: 4 })
-      .constraintSize({ minHeight: 52 })
+      .padding({ left: 18, right: 14, top: 10, bottom: 6 })
+      .constraintSize({ minHeight: 60 })
       .width('100%')
 
       Search({ value: this.query, placeholder: '搜索聊天和消息' })
-        .margin({ left: 12, right: 12, bottom: 4 })
+        .height(40)
+        .backgroundColor($r('app.color.input_bg'))
+        .placeholderColor($r('app.color.text_secondary'))
+        .fontColor($r('app.color.text_primary'))
+        .margin({ left: 14, right: 14, top: 2, bottom: 6 })
         .onChange((v: string) => this.onQuery(v))
 
       if (this.query.trim()) {
@@ -578,7 +610,7 @@ struct Main {
                 .alignItems(HorizontalAlign.Start)
                 .layoutWeight(1)
               }
-              .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+              .padding({ left: 16, right: 16, top: 9, bottom: 9 })
               .onClick(() => this.nav.openRootChat(h.chatId, h.msgId))
             }
           }, (h: SearchHit) => `${h.chatId}|${h.msgId}`)
@@ -592,15 +624,20 @@ struct Main {
           if (this.folderId === 0 && this.archiveCount > 0) {
             ListItem() {
               Row({ space: 12 }) {
-                Text('🗄').fontSize(24).width(54).height(54).textAlign(TextAlign.Center).borderRadius(27)
-                  .backgroundColor($r('app.color.chip'))
-                Column() {
-                  Text('归档的聊天').fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
-                  Text(`${this.archiveCount} 个聊天`).fontSize(13).fontColor($r('app.color.text_secondary'))
+                Stack() {
+                  SymbolGlyph($r('sys.symbol.archivebox_fill')).fontSize(24).fontColor([Color.White])
+                }
+                .width(54).height(54).borderRadius(27)
+                .linearGradient({ angle: 135, colors: [['#A9B4C2', 0], ['#6F7C8C', 1]] })
+                Column({ space: 4 }) {
+                  Text('归档的聊天').fontSize(16).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+                  Text(`${this.archiveCount} 个聊天`).fontSize(14).fontColor($r('app.color.text_secondary'))
                 }
                 .alignItems(HorizontalAlign.Start)
+                .layoutWeight(1)
+                SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(16).fontColor([$r('app.color.text_secondary')])
               }
-              .padding({ left: 14, right: 14, top: 9, bottom: 9 })
+              .padding({ left: 16, right: 16, top: 10, bottom: 10 })
               .width('100%')
               .onClick(() => this.selectFolder(-1))
             }
@@ -611,14 +648,17 @@ struct Main {
                 .onClick(() => this.nav.openRootChat(row.id))
                 .gesture(LongPressGesture().onAction(() => this.chatMenu(row)))
             }
+            // The open chat is marked with a rounded tint inset from the edges.
             .backgroundColor(this.split() && this.stack.length > 0 && this.stack[0].kind === 'chat' &&
               !this.stack[0].threadId && this.stack[0].chatId === row.id ? $r('app.color.accent_soft') :
               Color.Transparent)
+            .borderRadius(16)
+            .margin({ left: 6, right: 6 })
             .swipeAction({ end: { builder: (): void => { this.RowActions(row) } } })
           }, (row: ChatRowData) => row.key)
         }
         .layoutWeight(1)
-        .divider({ strokeWidth: 0.5, color: $r('app.color.separator'), startMargin: 80 })
+        .padding({ top: 4 })
         .onReachEnd(() => this.acc.chats.loadMore(this.folderId))
       }
     }

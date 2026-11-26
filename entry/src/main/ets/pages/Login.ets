@@ -144,7 +144,7 @@ struct Login {
   @Builder
   Form() {
     Column({ space: 14 }) {
-      Text(this.title()).fontSize(20).fontColor($r('app.color.text_primary'))
+      Text(this.title()).fontSize(22).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
       if (this.step === 'phone' || this.step === 'code' || this.step === 'password') {
         if (this.step === 'code' && this.hint) {
           Text(this.hint).fontSize(14).fontColor($r('app.color.text_secondary')).textAlign(TextAlign.Center)
@@ -154,7 +154,31 @@ struct Login {
             (this.step === 'code' ? InputType.Number : InputType.PhoneNumber))
           .onChange((v: string) => { this.input = v; })
           .onSubmit(() => this.submit())
-        Button(this.busy ? '请稍候…' : '下一步').width('100%').enabled(!this.busy).onClick(() => this.submit())
+          .height(52)
+          .fontSize(17)
+          .borderRadius(16)
+          .backgroundColor($r('app.color.input_bg'))
+          .placeholderColor($r('app.color.text_secondary'))
+          .caretColor($r('app.color.accent'))
+          .padding({ left: 16, right: 16 })
+        Row({ space: 8 }) {
+          if (this.busy) {
+            LoadingProgress().width(20).height(20).color(Color.White)
+          }
+          Text(this.busy ? '请稍候…' : '下一步').fontSize(17).fontWeight(FontWeight.Bold).fontColor(Color.White)
+        }
+        .width('100%')
+        .height(52)
+        .justifyContent(FlexAlign.Center)
+        .borderRadius(26)
+        .linearGradient({ angle: 90, colors: [[$r('app.color.accent'), 0], [$r('app.color.accent_end'), 1]] })
+        .opacity(this.busy ? 0.7 : 1)
+        .clickEffect({ level: ClickEffectLevel.LIGHT })
+        .onClick(() => {
+          if (!this.busy) {
+            this.submit();
+          }
+        })
         if (this.step === 'phone') {
           Button('改用二维码登录', { buttonStyle: ButtonStyleMode.TEXTUAL })
             .onClick(() => {
@@ -196,8 +220,19 @@ struct Login {
     Stack() {
       Scroll() {
         Column({ space: 16 }) {
-          Text('TdGram').fontSize(32).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
-            .margin({ top: Math.max(16, Math.min(80, this.winH * 0.1)) })
+          Stack() {
+            SymbolGlyph($r('sys.symbol.paperplane_fill')).fontSize(48).fontColor([Color.White])
+          }
+          .width(104)
+          .height(104)
+          .borderRadius(34)
+          .linearGradient({ angle: 135, colors: [[$r('app.color.accent'), 0], [$r('app.color.accent_end'), 1]] })
+          .shadow({ radius: 28, color: '#402F6BFF', offsetY: 10 })
+          .margin({ top: Math.max(16, Math.min(80, this.winH * 0.1)) })
+          Text('TdGram').fontSize(40).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+            .letterSpacing(-1)
+          Text('鸿蒙上的原生 Telegram 客户端').fontSize(15).fontColor($r('app.color.text_secondary'))
+            .margin({ top: -10, bottom: 12 })
           this.Form()
         }
         .padding(24)

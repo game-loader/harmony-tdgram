@@ -1,3 +1,5 @@
+import { IconButton } from './IconButton';
+
 // Title bar of a detail pane. The back button disappears when the pane sits
 // beside the chat list (unfolded) and returns when it fills the window.
 @Component
@@ -12,17 +14,18 @@ export struct PaneHeader {
   }
 
   build() {
-    Row({ space: 8 }) {
+    Row({ space: 4 }) {
       if (this.showBack) {
-        Button('‹', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(28).onClick(() => this.onBack())
+        IconButton({ glyph: $r('sys.symbol.chevron_left'), tint: $r('app.color.text_primary'), glyphSize: 24 })
+          .onClick(() => this.onBack())
       }
-      Text(this.title).fontSize(18).fontWeight(FontWeight.Medium).maxLines(1)
+      Text(this.title).fontSize(19).fontWeight(FontWeight.Bold).maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
         .fontColor($r('app.color.text_primary'))
       this.trailing()
     }
-    .padding({ left: this.showBack ? 0 : 16, right: 4 })
-    .height(48)
+    .padding({ left: this.showBack ? 4 : 18, right: 6 })
+    .height(56)
     .width('100%')
   }
 }

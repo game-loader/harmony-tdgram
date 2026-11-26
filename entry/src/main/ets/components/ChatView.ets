@@ -8,6 +8,7 @@ import { geoLocationManager } from '@kit.LocationKit';
 import { AlbumItem, BubbleActions, BubbleData, MessageBubble } from './MessageBubble';
 import { ActionPanel, PanelItem } from './ActionPanel';
 import { Avatar } from './Avatar';
+import { IconButton } from './IconButton';
 import { FloatButton } from './FloatButton';
 import { StickerPanel } from './StickerPanel';
 import { AppState, copyText, ForwardRequest, ViewerItem } from '../common/AppState';
@@ -66,6 +67,15 @@ class MenuState {
 
 interface BottomP {
   label: string;
+  fn: () => void;
+}
+
+interface AttachP {
+  glyph: Resource | null;
+  emoji: string;
+  label: string;
+  from: string;
+  to: string;
   fn: () => void;
 }
 
@@ -1806,11 +1816,12 @@ export struct ChatView {
   Header() {
     if (this.selected.length > 0) {
       Row({ space: 4 }) {
-        Button('✕', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => {
+        IconButton({ glyph: $r('sys.symbol.xmark'), tint: $r('app.color.text_primary') }).onClick(() => {
           this.selected = [];
           this.rebuild(false);
         })
-        Text(`已选择 ${this.selected.length} 条`).fontSize(17).layoutWeight(1).fontColor($r('app.color.text_primary'))
+        Text(`已选择 ${this.selected.length} 条`).fontSize(17).fontWeight(FontWeight.Bold).layoutWeight(1)
+          .fontColor($r('app.color.text_primary'))
         Button('复制', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => {
           const texts = this.source.items().filter((b: BubbleData) => b.selected)
             .map((b: BubbleData) => summary(b.msg));
@@ -1824,25 +1835,28 @@ export struct ChatView {
           .onClick(() => this.confirmDelete(this.selected, true))
       }
       .padding({ left: 4, right: 4 })
-      .height(52)
+      .height(56)
       .width('100%')
+      .backgroundColor($r('app.color.page_bg'))
+      .border({ width: { bottom: 0.5 }, color: $r('app.color.separator') })
     } else {
       Row({ space: 8 }) {
         if (this.showBack) {
-          Button('‹', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(28).onClick(() => this.onBack())
+          IconButton({ glyph: $r('sys.symbol.chevron_left'), tint: $r('app.color.text_primary'), glyphSize: 24 })
+            .onClick(() => this.onBack())
         }
-        Avatar({ title: this.title, seed: this.chatId, path: this.photo, side: 38 })
-        Column() {
+        Avatar({ title: this.title, seed: this.chatId, path: this.photo, side: 40 })
+        Column({ space: 1 }) {
           Row({ space: 4 }) {
             if (this.chat && this.chat.type === 'secret') {
-              Text('🔒').fontSize(14)
+              SymbolGlyph($r('sys.symbol.lock_fill')).fontSize(14).fontColor([$r('app.color.secret')])
             }
-            Text(this.title).fontSize(17).fontWeight(FontWeight.Medium).maxLines(1)
+            Text(this.title).fontSize(17).fontWeight(FontWeight.Bold).maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .fontColor(this.chat && this.chat.type === 'secret' ? $r('app.color.secret') : $r('app.color.text_primary'))
           }
           if (this.subtitle) {
-            Text(this.subtitle).fontSize(12).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text(this.subtitle).fontSize(13).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
               .fontColor(this.subtitle.endsWith('…') || this.subtitle === '在线' ? $r('app.color.accent') :
                 $r('app.color.text_secondary'))
           }
@@ -1854,11 +1868,14 @@ export struct ChatView {
             this.openProfile(this.chat.userId, this.chat.id);
           }
         })
-        Button('⋮', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(22).onClick(() => this.chatMenu())
+        IconButton({ glyph: $r('sys.symbol.dot_grid_1x2'), tint: $r('app.color.text_primary') })
+          .onClick(() => this.chatMenu())
       }
-      .padding({ left: this.showBack ? 0 : 12, right: 4 })
-      .height(52)
+      .padding({ left: this.showBack ? 4 : 14, right: 6 })
+      .height(56)
       .width('100%')
+      .backgroundColor($r('app.color.page_bg'))
+      .border({ width: { bottom: 0.5 }, color: $r('app.color.separator') })
     }
   }
 
@@ -1867,16 +1884,20 @@ export struct ChatView {
   PlayerBar() {
     if (this.playerOn) {
       Row({ space: 6 }) {
-        Text(this.playerPlaying ? '❚❚' : '▶').fontSize(14).fontColor($r('app.color.accent')).width(36).height(36)
-          .textAlign(TextAlign.Center).onClick(() => this.audioPlayer.togglePause())
+        if (this.playerPlaying) {
+          IconButton({ glyph: $r('sys.symbol.pause_fill'), tint: $r('app.color.accent'), side: 36, glyphSize: 18 })
+            .onClick(() => this.audioPlayer.togglePause())
+        } else {
+          IconButton({ glyph: $r('sys.symbol.play_fill'), tint: $r('app.color.accent'), side: 36, glyphSize: 18 })
+            .onClick(() => this.audioPlayer.togglePause())
+        }
         Text(this.playerTitle).fontSize(13).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1).fontColor($r('app.color.text_primary'))
         Text(`${this.playerSpeed}x`).fontSize(12).fontWeight(FontWeight.Medium)
           .fontColor(this.playerSpeed === 1 ? $r('app.color.text_secondary') : $r('app.color.accent'))
           .padding({ left: 8, right: 8, top: 3, bottom: 3 }).borderRadius(10).backgroundColor($r('app.color.chip'))
           .onClick(() => this.audioPlayer.cycleSpeed())
-        Text('✕').fontSize(14).fontColor($r('app.color.text_secondary')).width(36).height(36)
-          .textAlign(TextAlign.Center).onClick(() => this.audioPlayer.stop())
+        IconButton({ glyph: $r('sys.symbol.xmark'), side: 36, glyphSize: 18 }).onClick(() => this.audioPlayer.stop())
       }
       .padding({ left: 6, right: 4 })
       .width('100%')
@@ -1888,16 +1909,19 @@ export struct ChatView {
   @Builder
   ComposerBanner() {
     if (this.replyTo || this.editing) {
-      Row({ space: 8 }) {
-        Column() {
-          Text(this.editing ? '编辑消息' : `回复 ${this.previewOf(this.replyTo!).name}`).fontSize(12)
-            .fontColor($r('app.color.accent'))
+      Row({ space: 10 }) {
+        SymbolGlyph(this.editing ? $r('sys.symbol.square_and_pencil') : $r('sys.symbol.arrowshape_turn_up_left'))
+          .fontSize(20).fontColor([$r('app.color.accent')])
+        Column().width(3).height(32).borderRadius(1.5).backgroundColor($r('app.color.accent'))
+        Column({ space: 1 }) {
+          Text(this.editing ? '编辑消息' : `回复 ${this.previewOf(this.replyTo!).name}`).fontSize(13)
+            .fontWeight(FontWeight.Bold).fontColor($r('app.color.accent'))
           Text(this.editing ? summary(this.editing) : this.previewOf(this.replyTo!).text).fontSize(13).maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.text_primary'))
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
-        Button('✕', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => {
+        IconButton({ glyph: $r('sys.symbol.xmark'), side: 36, glyphSize: 18 }).onClick(() => {
           if (this.editing) {
             this.draft = '';
           }
@@ -1905,9 +1929,8 @@ export struct ChatView {
           this.editing = null;
         })
       }
-      .padding({ left: 12, right: 4 })
+      .padding({ left: 16, right: 6, top: 6 })
       .width('100%')
-      .border({ width: { left: 3 }, color: { left: $r('app.color.accent') } })
     }
   }
 
@@ -1915,47 +1938,61 @@ export struct ChatView {
   AttachMenu() {
     if (this.showAttach) {
       Flex({ wrap: FlexWrap.Wrap }) {
-        this.AttachItem('🖼', '图片/视频', () => this.pickMedia())
-        this.AttachItem('📷', '拍摄', () => this.takePhoto())
-        this.AttachItem('📎', '文件', () => this.pickDocument())
-        this.AttachItem('📍', '位置', () => this.sendLocation())
+        this.AttachItem({ glyph: $r('sys.symbol.picture_fill'), emoji: '', label: '图片/视频', from: '#5AA2FF', to: '#2F6BFF', fn: () => this.pickMedia() })
+        this.AttachItem({ glyph: $r('sys.symbol.camera_fill'), emoji: '', label: '拍摄', from: '#FF8FB1', to: '#E5487A', fn: () => this.takePhoto() })
+        this.AttachItem({ glyph: $r('sys.symbol.doc_text_fill'), emoji: '', label: '文件', from: '#5FD9E6', to: '#12A5BA', fn: () => this.pickDocument() })
+        this.AttachItem({ glyph: $r('sys.symbol.location_up_fill'), emoji: '', label: '位置', from: '#7EE08F', to: '#2FAE5A', fn: () => this.sendLocation() })
         if (this.chat && this.chat.type !== 'secret' && this.chat.type !== 'private') {
-          this.AttachItem('📊', '投票', () => this.createPoll())
+          this.AttachItem({ glyph: $r('sys.symbol.list_bullet'), emoji: '', label: '投票', from: '#FFCB6B', to: '#F09A2E', fn: () => this.createPoll() })
         } else {
-          this.AttachItem('🔥', '阅后即焚', () => this.pickSelfDestructPhoto())
+          this.AttachItem({ glyph: $r('sys.symbol.flame_fill'), emoji: '', label: '阅后即焚', from: '#FF9B6B', to: '#E5484D', fn: () => this.pickSelfDestructPhoto() })
         }
-        this.AttachItem('🎲', '骰子', () => this.sendDice('🎲'))
-        this.AttachItem('🎯', '飞镖', () => this.sendDice('🎯'))
-        this.AttachItem('🏀', '篮球', () => this.sendDice('🏀'))
-        this.AttachItem('🎰', '老虎机', () => this.sendDice('🎰'))
+        this.AttachItem({ glyph: null, emoji: '🎲', label: '骰子', from: '', to: '', fn: () => this.sendDice('🎲') })
+        this.AttachItem({ glyph: null, emoji: '🎯', label: '飞镖', from: '', to: '', fn: () => this.sendDice('🎯') })
+        this.AttachItem({ glyph: null, emoji: '🏀', label: '篮球', from: '', to: '', fn: () => this.sendDice('🏀') })
+        this.AttachItem({ glyph: null, emoji: '🎰', label: '老虎机', from: '', to: '', fn: () => this.sendDice('🎰') })
       }
-      .padding(10)
+      .padding({ left: 10, right: 10, top: 6, bottom: 12 })
       .width('100%')
-      .backgroundColor($r('app.color.page_alt'))
+      .backgroundColor($r('app.color.page_bg'))
     }
   }
 
+  // A colored tile with a symbol, or a plain tile with an emoji (the dice
+  // are sent as those emoji).
   @Builder
-  AttachItem(icon: string, label: string, fn: () => void) {
-    Column({ space: 4 }) {
-      Text(icon).fontSize(26).width(52).height(52).textAlign(TextAlign.Center).borderRadius(26)
-        .backgroundColor($r('app.color.card'))
-      Text(label).fontSize(12).fontColor($r('app.color.text_primary'))
+  AttachItem(p: AttachP) {
+    Column({ space: 6 }) {
+      if (p.glyph) {
+        Stack() {
+          SymbolGlyph(p.glyph).fontSize(24).fontColor([Color.White])
+        }
+        .width(52).height(52).borderRadius(18)
+        .linearGradient({ angle: 135, colors: [[p.from, 0], [p.to, 1]] })
+      } else {
+        Text(p.emoji).fontSize(26).width(52).height(52).textAlign(TextAlign.Center).borderRadius(18)
+          .backgroundColor($r('app.color.input_bg'))
+      }
+      Text(p.label).fontSize(13).fontColor($r('app.color.text_primary')).maxLines(1)
     }
     // One row on the unfolded screen, two or three on the cover screen.
     .width(`${100 / columnsFor(this.paneW - 20, 84, 4, 9)}%`)
     .padding(6)
-    .onClick(fn)
+    .clickEffect({ level: ClickEffectLevel.LIGHT })
+    .onClick(() => p.fn())
   }
 
   @Builder
   BottomAction(p: BottomP) {
     Row() {
-      Button(p.label, { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => p.fn())
+      Text(p.label).fontSize(16).fontWeight(FontWeight.Bold).fontColor(Color.White)
+        .textAlign(TextAlign.Center).height(44).width('100%').borderRadius(22)
+        .linearGradient({ angle: 90, colors: [[$r('app.color.accent'), 0], [$r('app.color.accent_end'), 1]] })
+        .clickEffect({ level: ClickEffectLevel.LIGHT })
+        .onClick(() => p.fn())
     }
-    .justifyContent(FlexAlign.Center)
+    .padding({ left: 16, right: 16, top: 6, bottom: 8 })
     .width('100%')
-    .height(52)
   }
 
   @Builder
@@ -1981,18 +2018,23 @@ export struct ChatView {
       }
     } else if (this.recording) {
       Row({ space: 10 }) {
-        Column().width(10).height(10).borderRadius(5).backgroundColor(Color.Red)
+        Column().width(10).height(10).borderRadius(5).backgroundColor($r('app.color.danger'))
         Text(`${Math.floor(this.recordSecs / 60)}:${(this.recordSecs % 60 < 10 ? '0' : '')}${this.recordSecs % 60}`)
-          .fontSize(16).fontColor($r('app.color.text_primary'))
-        Text('‹ 上滑取消').fontSize(14).fontColor($r('app.color.text_secondary')).layoutWeight(1)
-          .textAlign(TextAlign.Center)
+          .fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+        Row({ space: 4 }) {
+          SymbolGlyph($r('sys.symbol.chevron_up')).fontSize(14).fontColor([$r('app.color.text_secondary')])
+          Text('上滑取消').fontSize(14).fontColor($r('app.color.text_secondary'))
+        }
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
         this.MicButton()
       }
       .padding({ left: 16, right: 6, top: 6, bottom: 6 })
       .width('100%')
     } else {
-      Row({ space: 2 }) {
-        Button(this.showPanel ? '⌨' : '😀', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(20)
+      Row({ space: 4 }) {
+        IconButton({ glyph: this.showPanel ? $r('sys.symbol.keyboard') : $r('sys.symbol.face_smiling'),
+          tint: this.showPanel ? $r('app.color.accent') : $r('app.color.text_secondary'), side: 42, glyphSize: 24 })
           .onClick(() => {
             this.showPanel = !this.showPanel;
             this.showAttach = false;
@@ -2004,7 +2046,13 @@ export struct ChatView {
         TextArea({ placeholder: this.chat && this.chat.type === 'secret' ? '私密消息' : '消息', text: this.draft,
           controller: this.input })
           .layoutWeight(1)
-          .constraintSize({ maxHeight: Math.min(140, Math.max(60, this.paneH * 0.3)) })
+          .fontSize(16)
+          .borderRadius(21)
+          .backgroundColor($r('app.color.input_bg'))
+          .placeholderColor($r('app.color.text_secondary'))
+          .caretColor($r('app.color.accent'))
+          .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+          .constraintSize({ minHeight: 42, maxHeight: Math.min(140, Math.max(60, this.paneH * 0.3)) })
           .onChange((v: string) => this.onDraftChange(v))
           .onTextSelectionChange((start: number, end: number) => {
             this.caret = end;
@@ -2027,7 +2075,8 @@ export struct ChatView {
             return true;
           })
         if (this.draft.trim().length > 0) {
-          Button(this.editing ? '✓' : '➤', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(22)
+          IconButton({ glyph: this.editing ? $r('sys.symbol.checkmark') : $r('sys.symbol.paperplane_fill'),
+            filled: true, side: 42, glyphSize: 20 })
             .onClick(() => this.sendText())
             .gesture(LongPressGesture().onAction(() => {
               if (!this.editing) {
@@ -2038,7 +2087,8 @@ export struct ChatView {
             }))
         } else {
           if (this.keyboard.length > 0) {
-            Button(this.showKeyboard ? '⌄' : '⌘', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(18)
+            IconButton({ glyph: this.showKeyboard ? $r('sys.symbol.chevron_down') : $r('sys.symbol.square_grid_2x2'),
+              tint: this.showKeyboard ? $r('app.color.accent') : $r('app.color.text_secondary'), side: 40 })
               .onClick(() => {
                 this.showKeyboard = !this.showKeyboard;
                 this.showAttach = false;
@@ -2048,7 +2098,8 @@ export struct ChatView {
                 }
               })
           }
-          Button('📎', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(20)
+          IconButton({ glyph: $r('sys.symbol.paperclip'),
+            tint: this.showAttach ? $r('app.color.accent') : $r('app.color.text_secondary'), side: 40 })
             .onClick(() => {
               this.showAttach = !this.showAttach;
               this.showPanel = false;
@@ -2060,7 +2111,8 @@ export struct ChatView {
           this.MicButton()
         }
       }
-      .padding({ left: 2, right: 2, top: 4, bottom: 4 })
+      .alignItems(VerticalAlign.Bottom)
+      .padding({ left: 6, right: 8, top: 6, bottom: 8 })
       .width('100%')
     }
   }
@@ -2120,24 +2172,28 @@ export struct ChatView {
 
   @Builder
   MicButton() {
-    Text('🎤')
-      .fontSize(22)
-      .width(44)
-      .height(44)
-      .textAlign(TextAlign.Center)
-      .borderRadius(22)
-      .backgroundColor(this.recording ? $r('app.color.accent') : Color.Transparent)
-      .onTouch((e: TouchEvent) => {
-        if (e.type === TouchType.Down) {
-          this.startRecording();
-        } else if (e.type === TouchType.Up) {
-          this.stopRecording(false);
-        } else if (e.type === TouchType.Move && e.touches[0].y < -80) {
-          this.stopRecording(true);
-        } else if (e.type === TouchType.Cancel) {
-          this.stopRecording(true);
-        }
-      })
+    Stack() {
+      SymbolGlyph($r('sys.symbol.mic_fill')).fontSize(20).fontColor([Color.White])
+    }
+    .width(42)
+    .height(42)
+    .borderRadius(21)
+    .linearGradient({ angle: 135, colors: this.recording ?
+      [[$r('app.color.danger'), 0], [$r('app.color.danger'), 1]] :
+      [[$r('app.color.accent'), 0], [$r('app.color.accent_end'), 1]] })
+    .scale({ x: this.recording ? 1.18 : 1, y: this.recording ? 1.18 : 1 })
+    .animation({ duration: 180, curve: Curve.FastOutSlowIn })
+    .onTouch((e: TouchEvent) => {
+      if (e.type === TouchType.Down) {
+        this.startRecording();
+      } else if (e.type === TouchType.Up) {
+        this.stopRecording(false);
+      } else if (e.type === TouchType.Move && e.touches[0].y < -80) {
+        this.stopRecording(true);
+      } else if (e.type === TouchType.Cancel) {
+        this.stopRecording(true);
+      }
+    })
   }
 
   // Matches of a search or a tapped #hashtag. The panel is part of the
@@ -2148,14 +2204,17 @@ export struct ChatView {
       Row({ space: 2 }) {
         Search({ value: this.searchQuery, placeholder: '搜索此聊天，或输入 #标签' })
           .layoutWeight(1)
-          .height(38)
+          .height(40)
+          .backgroundColor($r('app.color.input_bg'))
           .onChange((v: string) => { this.searchQuery = v; })
           .onSubmit(() => this.runSearch(true))
-        Button('▲', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(13).onClick(() => this.stepHit(1))
-        Button('▼', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(13).onClick(() => this.stepHit(-1))
-        Button('✕', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => { this.searchOpen = false; })
+        IconButton({ glyph: $r('sys.symbol.chevron_up'), tint: $r('app.color.text_primary'), glyphSize: 20 })
+          .onClick(() => this.stepHit(1))
+        IconButton({ glyph: $r('sys.symbol.chevron_down'), tint: $r('app.color.text_primary'), glyphSize: 20 })
+          .onClick(() => this.stepHit(-1))
+        IconButton({ glyph: $r('sys.symbol.xmark'), glyphSize: 20 }).onClick(() => { this.searchOpen = false; })
       }
-      .padding({ left: 8, right: 2, top: 6, bottom: 2 })
+      .padding({ left: 10, right: 4, top: 8, bottom: 2 })
       .width('100%')
 
       Text(this.searchBusy && this.hits.length === 0 ? '正在搜索…' :
@@ -2206,14 +2265,17 @@ export struct ChatView {
           ListItem() {
             Column() {
               if (b.dayLabel) {
-                Text(b.dayLabel).fontSize(12).fontColor(Color.White)
-                  .padding({ left: 10, right: 10, top: 3, bottom: 3 }).borderRadius(10)
-                  .backgroundColor($r('app.color.service_bg')).margin({ top: 8, bottom: 4 })
+                Text(b.dayLabel).fontSize(13).fontWeight(FontWeight.Medium).fontColor(Color.White)
+                  .padding({ left: 12, right: 12, top: 4, bottom: 4 }).borderRadius(12)
+                  .backgroundColor($r('app.color.service_bg')).margin({ top: 10, bottom: 6 })
               }
               if (b.unreadDivider) {
-                Text('未读消息').fontSize(12).fontColor($r('app.color.accent')).textAlign(TextAlign.Center)
-                  .width('100%').padding({ top: 4, bottom: 4 }).margin({ top: 4, bottom: 4 })
-                  .backgroundColor($r('app.color.accent_soft'))
+                Row({ space: 10 }) {
+                  Column().height(1).layoutWeight(1).backgroundColor($r('app.color.accent')).opacity(0.4)
+                  Text('未读消息').fontSize(13).fontWeight(FontWeight.Bold).fontColor($r('app.color.accent'))
+                  Column().height(1).layoutWeight(1).backgroundColor($r('app.color.accent')).opacity(0.4)
+                }
+                .width('100%').padding({ left: 16, right: 16 }).margin({ top: 8, bottom: 8 })
               }
               if (b.hidden.length > 0) {
                 // Filtered messages fold into one line; a tap shows them.
@@ -2277,8 +2339,13 @@ export struct ChatView {
 
       if (this.count === 0) {
         Column() {
-          Text('暂无消息').fontSize(13).fontColor(Color.White).padding({ left: 12, right: 12, top: 5, bottom: 5 })
-            .borderRadius(12).backgroundColor($r('app.color.service_bg'))
+          Column({ space: 8 }) {
+            SymbolGlyph($r('sys.symbol.message_fill')).fontSize(36).fontColor([Color.White])
+            Text('暂无消息').fontSize(15).fontWeight(FontWeight.Medium).fontColor(Color.White)
+            Text('发一条消息打个招呼').fontSize(13).fontColor(Color.White).opacity(0.85)
+          }
+          .padding({ left: 28, right: 28, top: 20, bottom: 20 })
+          .borderRadius(24).backgroundColor($r('app.color.service_bg'))
         }
         .width('100%')
         .height('100%')
@@ -2320,7 +2387,7 @@ export struct ChatView {
     }
     .layoutWeight(1)
     .width('100%')
-    .backgroundColor($r('app.color.chat_bg'))
+    .linearGradient({ angle: 180, colors: [[$r('app.color.chat_bg'), 0], [$r('app.color.chat_bg_end'), 1]] })
     // Photos, videos, files and text dragged in from another window.
     .allowDrop([uniformTypeDescriptor.UniformDataType.IMAGE, uniformTypeDescriptor.UniformDataType.VIDEO,
       uniformTypeDescriptor.UniformDataType.FILE, uniformTypeDescriptor.UniformDataType.PLAIN_TEXT,
@@ -2364,18 +2431,22 @@ export struct ChatView {
             .textAlign(TextAlign.Center).backgroundColor($r('app.color.inset'))
         }
         if (this.pinnedText) {
-          Row({ space: 8 }) {
-            Column().width(3).height(30).backgroundColor($r('app.color.accent'))
-            Column() {
-              Text('置顶消息').fontSize(12).fontColor($r('app.color.accent'))
+          Row({ space: 10 }) {
+            Column().width(3).height(32).borderRadius(1.5).backgroundColor($r('app.color.accent'))
+            Column({ space: 1 }) {
+              Text('置顶消息').fontSize(13).fontWeight(FontWeight.Bold).fontColor($r('app.color.accent'))
               Text(this.pinnedText).fontSize(13).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                 .fontColor($r('app.color.text_primary'))
             }
             .alignItems(HorizontalAlign.Start)
             .layoutWeight(1)
+            SymbolGlyph($r('sys.symbol.pin_fill')).fontSize(16).fontColor([$r('app.color.text_secondary')])
+              .rotate({ angle: 45 })
           }
-          .padding({ left: 12, right: 12, top: 4, bottom: 4 })
+          .padding({ left: 14, right: 16, top: 6, bottom: 6 })
           .width('100%')
+          .backgroundColor($r('app.color.page_bg'))
+          .border({ width: { bottom: 0.5 }, color: $r('app.color.separator') })
           .onClick(() => {
             if (this.store.pinned) {
               this.jumpTo(this.store.pinned.id);
@@ -2410,6 +2481,8 @@ export struct ChatView {
             }
           }
           .width('100%')
+          .backgroundColor($r('app.color.page_bg'))
+          .border({ width: { top: 0.5 }, color: $r('app.color.separator') })
         }
       }
       .width('100%')

@@ -1,4 +1,5 @@
 import { Avatar } from './Avatar';
+import { IconButton } from './IconButton';
 import { formatTime } from '../common/Util';
 import { Accounts } from '../td/Accounts';
 import { Account } from '../td/Account';
@@ -72,21 +73,23 @@ export struct TopicList {
     Column() {
       Row({ space: 8 }) {
         if (this.showBack) {
-          Button('‹', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(28).onClick(() => this.onBack())
+          IconButton({ glyph: $r('sys.symbol.chevron_left'), tint: $r('app.color.text_primary'), glyphSize: 24 })
+            .onClick(() => this.onBack())
         }
-        Avatar({ title: this.title, seed: this.chatId, path: this.photo, side: 38 })
-        Column() {
-          Text(this.title).fontSize(17).fontWeight(FontWeight.Medium).maxLines(1)
+        Avatar({ title: this.title, seed: this.chatId, path: this.photo, side: 40 })
+        Column({ space: 1 }) {
+          Text(this.title).fontSize(17).fontWeight(FontWeight.Bold).maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.text_primary'))
-          Text(`${this.topics.length} 个话题`).fontSize(12).fontColor($r('app.color.text_secondary'))
+          Text(`${this.topics.length} 个话题`).fontSize(13).fontColor($r('app.color.text_secondary'))
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
         .onClick(() => this.onOpenProfile())
       }
-      .padding({ left: this.showBack ? 0 : 12, right: 8 })
-      .height(52)
+      .padding({ left: this.showBack ? 4 : 14, right: 8 })
+      .height(56)
       .width('100%')
+      .border({ width: { bottom: 0.5 }, color: $r('app.color.separator') })
 
       if (this.loading) {
         LoadingProgress().width(36).height(36).margin({ top: 40 }).color($r('app.color.accent'))

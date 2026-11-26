@@ -60,53 +60,88 @@ export class ChatRowData {
   }
 }
 
+// Read receipt drawn as one or two round-capped check strokes.
+@Component
+export struct Ticks {
+  @Prop double: boolean = false;
+  @Prop tint: ResourceColor = $r('app.color.tick');
+
+  build() {
+    Stack() {
+      Polyline().width(16).height(10).points([[1, 5], [4.5, 8.5], [11, 1.5]])
+        .stroke(this.tint).strokeWidth(1.6).strokeLineCap(LineCapStyle.Round)
+        .strokeLineJoin(LineJoinStyle.Round).fillOpacity(0)
+      if (this.double) {
+        Polyline().width(16).height(10).points([[8, 8.5], [15, 1.5]])
+          .stroke(this.tint).strokeWidth(1.6).strokeLineCap(LineCapStyle.Round).fillOpacity(0)
+      }
+    }
+    .width(16)
+    .height(10)
+  }
+}
+
 @Component
 export struct ChatRow {
   @ObjectLink row: ChatRowData;
 
+  private typeGlyph(): Resource | undefined {
+    if (this.row.type === 'secret') {
+      return $r('sys.symbol.lock_fill');
+    } else if (this.row.type === 'channel') {
+      return $r('sys.symbol.speaker_wave_2_fill');
+    } else if (this.row.forum) {
+      return $r('sys.symbol.message_on_message_fill');
+    } else if (this.row.type === 'group' || this.row.type === 'supergroup') {
+      return $r('sys.symbol.person_2_fill');
+    }
+    return undefined;
+  }
+
+  private unreadShown(): boolean {
+    return this.row.unread > 0 || this.row.markedUnread;
+  }
+
   build() {
     Row({ space: 12 }) {
       Stack({ alignContent: Alignment.BottomEnd }) {
-        Avatar({ title: this.row.title, seed: this.row.id, path: this.row.photo, side: 54 })
+        Avatar({ title: this.row.title, seed: this.row.id, path: this.row.photo, side: 56 })
         if (this.row.online) {
-          Column().width(14).height(14).borderRadius(7).backgroundColor('#4FCE5D')
-            .border({ width: 2, color: $r('app.color.page_bg') })
+          Column().width(15).height(15).borderRadius(7.5).backgroundColor('#2FC26B')
+            .border({ width: 2.5, color: $r('app.color.page_bg') })
         }
       }
-      Column({ space: 4 }) {
+      Column({ space: 5 }) {
         Row({ space: 4 }) {
-          if (this.row.type === 'secret') {
-            Text('🔒').fontSize(13)
-          } else if (this.row.type === 'channel') {
-            Text('📢').fontSize(13)
-          } else if (this.row.forum) {
-            Text('💬').fontSize(13)
-          } else if (this.row.type === 'group' || this.row.type === 'supergroup') {
-            Text('👥').fontSize(13)
+          if (this.typeGlyph() !== undefined) {
+            SymbolGlyph(this.typeGlyph()).fontSize(14)
+              .fontColor([this.row.type === 'secret' ? $r('app.color.secret') : $r('app.color.text_secondary')])
           }
           Text(this.row.title)
             .fontSize(16)
-            .fontWeight(FontWeight.Medium)
+            .fontWeight(FontWeight.Bold)
             .fontColor(this.row.type === 'secret' ? $r('app.color.secret') : $r('app.color.text_primary'))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1)
+            .flexShrink(1)
           if (this.row.muted) {
-            Text('🔕').fontSize(12)
+            SymbolGlyph($r('sys.symbol.speaker_slash_fill')).fontSize(13).fontColor([$r('app.color.text_secondary')])
           }
+          Blank()
           if (this.row.lastOutgoing) {
-            Text(this.row.read ? '✓✓' : '✓').fontSize(12).fontColor($r('app.color.tick'))
+            Ticks({ double: this.row.read })
           }
           Text(formatTime(this.row.lastDate))
-            .fontSize(12)
-            .fontColor($r('app.color.text_secondary'))
+            .fontSize(13)
+            .fontColor(this.unreadShown() && !this.row.muted ? $r('app.color.accent') : $r('app.color.text_secondary'))
         }
-        Row({ space: 4 }) {
+        .width('100%')
+        Row({ space: 6 }) {
           if (this.row.typing) {
             Text(this.row.typing).fontSize(14).fontColor($r('app.color.accent')).maxLines(1).layoutWeight(1)
           } else if (this.row.draft) {
             Text() {
-              Span('草稿: ').fontColor($r('app.color.danger'))
+              Span('草稿 ').fontColor($r('app.color.danger')).fontWeight(FontWeight.Medium)
               Span(this.row.draft).fontColor($r('app.color.text_secondary'))
             }
             .fontSize(14).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
@@ -119,28 +154,34 @@ export struct ChatRow {
               .layoutWeight(1)
           }
           if (this.row.unreadMentions > 0) {
-            Text('@').fontSize(12).fontColor(Color.White).width(20).height(20).textAlign(TextAlign.Center)
-              .borderRadius(10).backgroundColor($r('app.color.accent'))
+            Stack() {
+              SymbolGlyph($r('sys.symbol.at')).fontSize(13).fontColor([Color.White])
+            }
+            .width(22).height(22).borderRadius(11)
+            .linearGradient({ angle: 135, colors: [[$r('app.color.accent'), 0], [$r('app.color.accent_end'), 1]] })
           }
-          if (this.row.unread > 0 || this.row.markedUnread) {
+          if (this.unreadShown()) {
             Text(this.row.unread > 999 ? '999+' : (this.row.unread > 0 ? String(this.row.unread) : ''))
               .fontSize(12)
+              .fontWeight(FontWeight.Bold)
               .fontColor(Color.White)
-              .constraintSize({ minWidth: 20 })
-              .height(20)
+              .constraintSize({ minWidth: 22 })
+              .height(22)
               .textAlign(TextAlign.Center)
-              .padding({ left: 6, right: 6 })
-              .borderRadius(10)
-              .backgroundColor(this.row.muted ? '#A0A8B0' : $r('app.color.accent'))
+              .padding({ left: 7, right: 7 })
+              .borderRadius(11)
+              .backgroundColor(this.row.muted ? '#9AA5B3' : $r('app.color.accent'))
           } else if (this.row.pinned) {
-            Text('📌').fontSize(12)
+            SymbolGlyph($r('sys.symbol.pin_fill')).fontSize(15).fontColor([$r('app.color.text_secondary')])
+              .rotate({ angle: 45 })
           }
         }
+        .width('100%')
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
     }
-    .padding({ left: 14, right: 14, top: 9, bottom: 9 })
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
     .width('100%')
   }
 }
@@ -156,20 +197,37 @@ export struct ChatRowActions {
   onArchive: (row: ChatRowData) => void = (): void => {};
   onDelete: (row: ChatRowData) => void = (): void => {};
 
+  @Builder
+  Action(glyph: Resource, label: string, tint: string, fn: () => void) {
+    Column({ space: 5 }) {
+      SymbolGlyph(glyph).fontSize(22).fontColor([Color.White])
+      Text(label).fontSize(12).fontWeight(FontWeight.Medium).fontColor(Color.White).maxLines(1)
+    }
+    .width(68)
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(tint)
+    .onClick(fn)
+  }
+
   build() {
     Row() {
-      Text(this.row.unread > 0 || this.row.markedUnread ? '已读' : '未读').fontSize(14).fontColor(Color.White)
-        .width(64).height('100%').textAlign(TextAlign.Center).backgroundColor('#4A9BEA')
-        .onClick(() => this.onRead(this.row))
-      Text(this.row.pinned ? '取消置顶' : '置顶').fontSize(14).fontColor(Color.White)
-        .width(64).height('100%').textAlign(TextAlign.Center).backgroundColor('#F0A030')
-        .onClick(() => this.onPin(this.row))
-      Text(this.archived ? '移出归档' : '归档').fontSize(14).fontColor(Color.White)
-        .width(64).height('100%').textAlign(TextAlign.Center).backgroundColor('#8E99A4')
-        .onClick(() => this.onArchive(this.row))
-      Text(this.row.chat.type === 'private' || this.row.chat.type === 'secret' ? '删除' : '退出').fontSize(14)
-        .fontColor(Color.White).width(64).height('100%').textAlign(TextAlign.Center).backgroundColor('#E84026')
-        .onClick(() => this.onDelete(this.row))
+      if (this.row.unread > 0 || this.row.markedUnread) {
+        this.Action($r('sys.symbol.envelope_open_fill'), '已读', '#3F7FE6', () => this.onRead(this.row))
+      } else {
+        this.Action($r('sys.symbol.envelope_open_fill'), '未读', '#3F7FE6', () => this.onRead(this.row))
+      }
+      // Separate branches, so the label follows the row (builder arguments are not observed).
+      if (this.row.pinned) {
+        this.Action($r('sys.symbol.pin_slash'), '取消置顶', '#F09A2E', () => this.onPin(this.row))
+      } else {
+        this.Action($r('sys.symbol.pin_fill'), '置顶', '#F09A2E', () => this.onPin(this.row))
+      }
+      this.Action($r('sys.symbol.archivebox_fill'), this.archived ? '移出归档' : '归档', '#7D8A99',
+        () => this.onArchive(this.row))
+      this.Action($r('sys.symbol.trash_fill'),
+        this.row.chat.type === 'private' || this.row.chat.type === 'secret' ? '删除' : '退出', '#E5484D',
+        () => this.onDelete(this.row))
     }
     .height('100%')
   }

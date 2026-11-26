@@ -6,11 +6,11 @@
     },
     {
       "name": "page_bg",
-      "value": "#FFFFFF"
+      "value": "#F6F8FB"
     },
     {
       "name": "page_alt",
-      "value": "#F1F3F5"
+      "value": "#EEF2F7"
     },
     {
       "name": "card",
@@ -18,19 +18,19 @@
     },
     {
       "name": "separator",
-      "value": "#1F000000"
+      "value": "#14102A43"
     },
     {
       "name": "text_primary",
-      "value": "#1A1A1A"
+      "value": "#121826"
     },
     {
       "name": "text_secondary",
-      "value": "#7A8590"
+      "value": "#5F6B7A"
     },
     {
       "name": "chat_bg",
-      "value": "#DCE5EC"
+      "value": "#E4ECF5"
     },
     {
       "name": "bubble_in",
@@ -38,39 +38,39 @@
     },
     {
       "name": "bubble_out",
-      "value": "#D9F2C6"
+      "value": "#DCE7FF"
     },
     {
       "name": "bubble_meta",
-      "value": "#808A93"
+      "value": "#6E7A88"
     },
     {
       "name": "tick",
-      "value": "#4FAE4E"
+      "value": "#2F6BFF"
     },
     {
       "name": "link",
-      "value": "#2A7FD4"
+      "value": "#2459E0"
     },
     {
       "name": "accent",
-      "value": "#3A8DDE"
+      "value": "#2F6BFF"
     },
     {
       "name": "accent_soft",
-      "value": "#1F3A8DDE"
+      "value": "#1A2F6BFF"
     },
     {
       "name": "inset",
-      "value": "#0F000000"
+      "value": "#0D102A43"
     },
     {
       "name": "service_bg",
-      "value": "#66556677"
+      "value": "#5C33475E"
     },
     {
       "name": "selected",
-      "value": "#333A8DDE"
+      "value": "#292F6BFF"
     },
     {
       "name": "scrim",
@@ -78,19 +78,19 @@
     },
     {
       "name": "wave_in",
-      "value": "#B5C7D8"
+      "value": "#B7C4D6"
     },
     {
       "name": "wave_out",
-      "value": "#8BC37A"
+      "value": "#8EA9F0"
     },
     {
       "name": "danger",
-      "value": "#E84026"
+      "value": "#E5484D"
     },
     {
       "name": "secret",
-      "value": "#2E9E45"
+      "value": "#1E9E5A"
     },
     {
       "name": "highlight",
@@ -98,7 +98,23 @@
     },
     {
       "name": "chip",
-      "value": "#14000000"
+      "value": "#0F102A43"
+    },
+    {
+      "name": "accent_end",
+      "value": "#12B5CB"
+    },
+    {
+      "name": "chat_bg_end",
+      "value": "#EEF0F9"
+    },
+    {
+      "name": "input_bg",
+      "value": "#EEF2F7"
+    },
+    {
+      "name": "bar_bg",
+      "value": "#F2F6F8FB"
     }
   ]
 }

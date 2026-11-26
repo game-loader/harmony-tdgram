@@ -1,4 +1,4 @@
-import { avatarColor, initials } from '../common/Util';
+import { avatarGradient, initials } from '../common/Util';
 
 @Component
 export struct Avatar {
@@ -17,14 +17,18 @@ export struct Avatar {
           .borderRadius(this.side / 2)
       } else {
         Text(initials(this.title))
-          .fontSize(this.side * 0.42)
+          .fontSize(Math.round(this.side * 0.4))
           .fontColor(Color.White)
-          .fontWeight(FontWeight.Medium)
+          .fontWeight(FontWeight.Bold)
       }
     }
     .width(this.side)
     .height(this.side)
     .borderRadius(this.side / 2)
-    .backgroundColor(this.path ? Color.Transparent : avatarColor(this.seed))
+    .linearGradient({
+      angle: 135,
+      colors: this.path ? [[Color.Transparent, 0], [Color.Transparent, 1]] :
+        [[avatarGradient(this.seed)[0], 0], [avatarGradient(this.seed)[1], 1]]
+    })
   }
 }

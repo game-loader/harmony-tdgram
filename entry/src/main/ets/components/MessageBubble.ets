@@ -1,4 +1,5 @@
-import { decodeWaveform, formatSize, formatTime, minithumbUri } from '../common/Util';
+import { avatarGradient, decodeWaveform, formatSize, formatTime, minithumbUri } from '../common/Util';
+import { Ticks } from './ChatRow';
 import { InlineButton, MsgItem, PollOptionItem, ReactionItem } from '../td/Models';
 import { formatDuration } from '../td/Parse';
 import { FormattedText } from './FormattedText';
@@ -140,15 +141,16 @@ export struct MessageBubble {
   Reply() {
     if (this.data.msg.replyToId) {
       Column() {
-        Text(this.data.replyName || '回复').fontSize(12).fontColor($r('app.color.link')).maxLines(1)
-        Text(this.data.replyText || '…').fontSize(12).maxLines(1)
+        Text(this.data.replyName || '回复').fontSize(13).fontWeight(FontWeight.Bold).fontColor($r('app.color.link'))
+          .maxLines(1)
+        Text(this.data.replyText || '…').fontSize(13).maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.bubble_meta'))
       }
       .alignItems(HorizontalAlign.Start)
-      .padding({ left: 8, top: 2, bottom: 2, right: 4 })
-      .border({ width: { left: 2 }, color: { left: $r('app.color.link') } })
+      .padding({ left: 9, top: 4, bottom: 4, right: 8 })
+      .border({ width: { left: 3 }, color: { left: $r('app.color.link') } })
       .backgroundColor($r('app.color.inset'))
-      .borderRadius(4)
+      .borderRadius(8)
       .onClick(() => this.actions?.onJump(this.data.msg.replyToId))
     }
   }
@@ -360,10 +362,13 @@ export struct MessageBubble {
         Progress({ value: this.data.progress, total: 100, type: ProgressType.Ring })
           .width(40).height(40).color(Color.White).style({ strokeWidth: 3 })
       } else {
-        Text(this.data.playing ? '❚❚' : (this.data.filePath ? '▶' : '⬇')).fontSize(16).fontColor(Color.White)
+        SymbolGlyph(this.data.playing ? $r('sys.symbol.pause_fill') :
+          (this.data.filePath ? $r('sys.symbol.play_fill') : $r('sys.symbol.arrow_down')))
+          .fontSize(20).fontColor([Color.White])
       }
     }
-    .width(44).height(44).borderRadius(22).backgroundColor($r('app.color.accent'))
+    .width(44).height(44).borderRadius(22)
+    .linearGradient({ angle: 135, colors: [[$r('app.color.accent'), 0], [$r('app.color.accent_end'), 1]] })
     .onClick(() => this.tapOr(() => this.actions?.onAudio(this.data)))
   }
 
@@ -405,13 +410,15 @@ export struct MessageBubble {
           Progress({ value: this.data.progress, total: 100, type: ProgressType.Ring })
             .width(36).height(36).color(Color.White).style({ strokeWidth: 3 })
         } else if (!this.data.thumbPath) {
-          Text(this.data.filePath ? '📄' : '⬇').fontSize(20).fontColor(Color.White)
+          SymbolGlyph(this.data.filePath ? $r('sys.symbol.doc_text_fill') : $r('sys.symbol.arrow_down'))
+            .fontSize(22).fontColor([Color.White])
         }
       }
-      .width(48).height(48).borderRadius(8).backgroundColor($r('app.color.accent'))
+      .width(48).height(48).borderRadius(12)
+      .linearGradient({ angle: 135, colors: [[$r('app.color.accent'), 0], [$r('app.color.accent_end'), 1]] })
       Column({ space: 2 }) {
-        Text(this.data.msg.fileName).fontSize(14).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
-          .fontColor($r('app.color.text_primary'))
+        Text(this.data.msg.fileName).fontSize(14).fontWeight(FontWeight.Medium).maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.text_primary'))
         Text(this.data.progress >= 0 ? `${this.data.progress}% · ${formatSize(this.data.msg.fileSize)}` :
           formatSize(this.data.msg.fileSize)).fontSize(12).fontColor($r('app.color.bubble_meta'))
       }
@@ -559,7 +566,12 @@ export struct MessageBubble {
       Text(`${this.data.msg.emoji}  ${this.data.msg.diceValue}`).fontSize(40)
     } else if (this.data.msg.kind === 'call') {
       Row({ space: 8 }) {
-        Text(this.data.msg.callVideo ? '📹' : '📞').fontSize(22)
+        Stack() {
+          SymbolGlyph(this.data.msg.callVideo ? $r('sys.symbol.video_fill') : $r('sys.symbol.phone_fill'))
+            .fontSize(18).fontColor([Color.White])
+        }
+        .width(36).height(36).borderRadius(18)
+        .backgroundColor(this.data.msg.callMissed ? $r('app.color.danger') : $r('app.color.secret'))
         Column() {
           Text(this.data.msg.outgoing ? '呼出' : (this.data.msg.callMissed ? '未接来电' : '呼入')).fontSize(14)
             .fontColor(this.data.msg.callMissed ? $r('app.color.danger') : $r('app.color.text_primary'))
@@ -599,7 +611,8 @@ export struct MessageBubble {
   Footer() {
     Row({ space: 4 }) {
       if (this.data.msg.views) {
-        Text(`👁 ${this.data.msg.views >= 1000 ? (this.data.msg.views / 1000).toFixed(1) + 'K' : this.data.msg.views}`)
+        SymbolGlyph($r('sys.symbol.eye')).fontSize(12).fontColor([$r('app.color.bubble_meta')])
+        Text(`${this.data.msg.views >= 1000 ? (this.data.msg.views / 1000).toFixed(1) + 'K' : this.data.msg.views}`)
           .fontSize(11).fontColor($r('app.color.bubble_meta'))
       }
       if (this.data.msg.editDate) {
@@ -614,7 +627,11 @@ export struct MessageBubble {
             }
           })
       } else if (this.data.msg.outgoing) {
-        Text(this.data.msg.pending ? '🕓' : (this.data.read ? '✓✓' : '✓')).fontSize(11).fontColor($r('app.color.tick'))
+        if (this.data.msg.pending) {
+          SymbolGlyph($r('sys.symbol.clock')).fontSize(11).fontColor([$r('app.color.bubble_meta')])
+        } else {
+          Ticks({ double: this.data.read })
+        }
       }
     }
     // Hug the content: a full-width footer would stretch every bubble.
@@ -626,9 +643,10 @@ export struct MessageBubble {
   ThreadRow() {
     if (this.data.canThread) {
       Row({ space: 6 }) {
-        Text(this.data.msg.replyCount > 0 ? `💬 ${this.data.msg.replyCount} 条${this.data.msg.isChannelPost ? '评论' : '回复'}` :
-          '💬 发表评论').fontSize(13).fontColor($r('app.color.link')).layoutWeight(1)
-        Text('›').fontSize(15).fontColor($r('app.color.link'))
+        SymbolGlyph($r('sys.symbol.message')).fontSize(16).fontColor([$r('app.color.link')])
+        Text(this.data.msg.replyCount > 0 ? `${this.data.msg.replyCount} 条${this.data.msg.isChannelPost ? '评论' : '回复'}` :
+          '发表评论').fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.link')).layoutWeight(1)
+        SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([$r('app.color.link')])
       }
       .width(this.threadW())
       .padding({ top: 6, bottom: 2 })
@@ -650,8 +668,8 @@ export struct MessageBubble {
           Row({ space: 4 }) {
             ForEach(row, (r: ReactionItem) => {
               Text(`${r.emoji} ${r.count}`).fontSize(13)
-                .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-                .borderRadius(12)
+                .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+                .borderRadius(14)
                 .backgroundColor(r.chosen ? $r('app.color.accent') : $r('app.color.accent_soft'))
                 .fontColor(r.chosen ? Color.White : $r('app.color.link'))
                 .onClick(() => this.actions?.onReact(this.data, r.emoji))
@@ -672,7 +690,7 @@ export struct MessageBubble {
           Row({ space: 4 }) {
             ForEach(row, (b: InlineButton) => {
               Button(b.url ? `${b.text} ↗` : b.text, { buttonStyle: ButtonStyleMode.NORMAL })
-                .fontSize(13).height(34).layoutWeight(1).borderRadius(8)
+                .fontSize(14).fontWeight(FontWeight.Medium).height(36).layoutWeight(1).borderRadius(12)
                 .labelStyle({ maxLines: 1, overflow: TextOverflow.Ellipsis })
                 .onClick(() => this.actions?.onButton(this.data, b))
             }, (b: InlineButton, i: number) => `${ri}|${i}|${b.text}`)
@@ -708,8 +726,9 @@ export struct MessageBubble {
   build() {
     if (this.data.msg.kind === 'service') {
       Row() {
-        Text(this.data.msg.text).fontSize(13).fontColor(Color.White).textAlign(TextAlign.Center)
-          .padding({ left: 10, right: 10, top: 4, bottom: 4 }).borderRadius(12)
+        Text(this.data.msg.text).fontSize(13).fontWeight(FontWeight.Medium).fontColor(Color.White)
+          .textAlign(TextAlign.Center)
+          .padding({ left: 12, right: 12, top: 5, bottom: 5 }).borderRadius(14)
           .backgroundColor($r('app.color.service_bg'))
           .constraintSize({ maxWidth: this.bubbleMax })
       }
@@ -718,7 +737,8 @@ export struct MessageBubble {
       Row() {
         Column({ space: 4 }) {
           if (this.data.showSender && !this.data.msg.outgoing) {
-            Text(this.data.senderName).fontSize(13).fontColor($r('app.color.link')).fontWeight(FontWeight.Medium)
+            Text(this.data.senderName).fontSize(13).fontColor(avatarGradient(this.data.msg.senderId)[1])
+              .fontWeight(FontWeight.Bold)
               .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
               .onClick(() => this.actions?.onSender(this.data))
           }
@@ -740,8 +760,9 @@ export struct MessageBubble {
           this.Footer()
         }
         .alignItems(HorizontalAlign.Start)
-        .padding(this.isBare() ? 2 : { left: 10, right: 10, top: 6, bottom: 6 })
-        .borderRadius(14)
+        .padding(this.isBare() ? 2 : { left: 12, right: 12, top: 7, bottom: 7 })
+        .borderRadius(this.data.msg.outgoing ? { topLeft: 18, topRight: 18, bottomLeft: 18, bottomRight: 6 } :
+          { topLeft: 18, topRight: 18, bottomLeft: 6, bottomRight: 18 })
         .backgroundColor(this.isBare() ? Color.Transparent :
           (this.data.msg.outgoing ? $r('app.color.bubble_out') : $r('app.color.bubble_in')))
         .constraintSize({ maxWidth: this.bubbleMax })
@@ -751,7 +772,7 @@ export struct MessageBubble {
         })
       }
       .width('100%')
-      .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+      .padding({ left: 10, right: 10, top: 3, bottom: 3 })
       .justifyContent(this.data.msg.outgoing ? FlexAlign.End : FlexAlign.Start)
       .backgroundColor(this.data.selected ? $r('app.color.selected') :
         (this.data.highlight ? $r('app.color.highlight') : Color.Transparent))

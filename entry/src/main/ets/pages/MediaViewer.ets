@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { IconButton } from '../components/IconButton';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { fileIo as fs, fileUri } from '@kit.CoreFileKit';
 import { AppState, ViewerItem } from '../common/AppState';
@@ -233,7 +234,7 @@ struct MediaViewer {
       if (this.chrome) {
         Column() {
           Row({ space: 8 }) {
-            Button('✕', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontColor(Color.White).fontSize(20)
+            IconButton({ glyph: $r('sys.symbol.xmark'), tint: Color.White })
               .onClick(() => this.getUIContext().getRouter().back())
             Text(`${this.index + 1} / ${this.items.length}`).fontColor(Color.White).layoutWeight(1)
             Button('保存', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontColor(Color.White).onClick(() => this.save())

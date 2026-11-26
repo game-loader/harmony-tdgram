@@ -515,10 +515,12 @@ export struct ProfilePane {
   @Builder
   Head() {
     Column() {
-      Avatar({ title: this.title, seed: this.userId || this.chatId, path: this.photo, side: 96 })
-      Text(this.title).fontSize(22).fontWeight(FontWeight.Bold).margin({ top: 10 }).textAlign(TextAlign.Center)
-        .fontColor($r('app.color.text_primary'))
-      Text(this.subtitle).fontSize(14).fontColor($r('app.color.text_secondary')).margin({ top: 2, bottom: 12 })
+      Avatar({ title: this.title, seed: this.userId || this.chatId, path: this.photo, side: 104 })
+        .margin({ top: 8 })
+      Text(this.title).fontSize(24).fontWeight(FontWeight.Bold).margin({ top: 14 }).textAlign(TextAlign.Center)
+        .letterSpacing(-0.4).fontColor($r('app.color.text_primary'))
+      Text(this.subtitle).fontSize(15).fontColor(this.subtitle === '在线' ? $r('app.color.accent') :
+        $r('app.color.text_secondary')).margin({ top: 4, bottom: 18 })
       Column() {
         this.Field({ label: '用户名（点击复制链接）', value: this.username ? '@' + this.username : '',
           copy: `https://t.me/${this.username}` })
@@ -527,12 +529,12 @@ export struct ProfilePane {
         this.Field({ label: '邀请链接（点击复制）', value: this.inviteLink })
         this.Field({ label: 'ID（点击复制）', value: this.idText })
       }
-      .borderRadius(12)
+      .borderRadius(16)
       .backgroundColor($r('app.color.card'))
       Column() {
         if (this.isUser && this.userId !== this.acc.myUserId) {
           this.Action({ label: '发消息', color: $r('app.color.accent'), fn: () => this.message() })
-          this.Action({ label: '开始私密聊天 🔒', color: $r('app.color.secret'), fn: () => this.secretChat() })
+          this.Action({ label: '开始私密聊天', color: $r('app.color.secret'), fn: () => this.secretChat() })
         } else if (!this.isUser) {
           this.Action({ label: '查看消息', color: $r('app.color.accent'), fn: () => this.nav.openChat(this.chatId) })
         }
@@ -562,9 +564,9 @@ export struct ProfilePane {
           this.Action({ label: this.isChannel ? '退出频道' : '退出群组', color: $r('app.color.danger'), fn: () => this.leave() })
         }
       }
-      .borderRadius(12)
+      .borderRadius(16)
       .backgroundColor($r('app.color.card'))
-      .margin({ top: 12 })
+      .margin({ top: 14 })
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center)
@@ -575,9 +577,10 @@ export struct ProfilePane {
   TabBar() {
     Row() {
       ForEach(this.tabs, (t: SharedTab, i: number) => {
-        Text(t.name).fontSize(14).layoutWeight(1).textAlign(TextAlign.Center).padding({ top: 10, bottom: 10 })
+        Text(t.name).fontSize(15).layoutWeight(1).textAlign(TextAlign.Center).padding({ top: 12, bottom: 10 })
+          .fontWeight(this.tab === i ? FontWeight.Bold : FontWeight.Medium)
           .fontColor(this.tab === i ? $r('app.color.accent') : $r('app.color.text_secondary'))
-          .border({ width: { bottom: this.tab === i ? 2 : 0 }, color: { bottom: $r('app.color.accent') } })
+          .border({ width: { bottom: this.tab === i ? 3 : 0 }, color: { bottom: $r('app.color.accent') } })
           .onClick(() => this.selectTab(i))
       }, (t: SharedTab) => t.name)
     }
